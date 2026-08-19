@@ -3,19 +3,15 @@ import SwiftUI
 
 @main
 struct UpTilApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self)
+    private var appDelegate: AppDelegate
+
     var body: some Scene {
-        MenuBarExtra(
-            AppMetadata.displayName,
-            systemImage: "timer"
-        ) {
-            Text("UpTil is ready")
-
-            Divider()
-
-            Button("Quit UpTil") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q")
+        MenuBarExtra {
+            SessionPopover(controller: appDelegate.controller)
+        } label: {
+            MenuBarLabel(controller: appDelegate.controller)
         }
+        .menuBarExtraStyle(.window)
     }
 }
