@@ -1,4 +1,5 @@
 [tools]
+actionlint = "1.7.12"
 swiftformat = "0.62.1"
 swiftlint = "0.65.0"
 tuist = "4.202.5"
