@@ -1,21 +1,13 @@
 import AppKit
 import SwiftUI
-import UpTilCore
 
 enum MenuBarIconState {
     case idle
-    case active
 
-    init(session: KeepAwakeSession) {
-        self = session.isActive ? .active : .idle
-    }
-
-    fileprivate var symbolName: String {
+    fileprivate var glyph: String {
         switch self {
         case .idle:
-            "timer"
-        case .active:
-            "timer.circle.fill"
+            "⟩˄⟨"
         }
     }
 
@@ -23,52 +15,48 @@ enum MenuBarIconState {
         switch self {
         case .idle:
             "UpTil is idle"
-        case .active:
-            "UpTil is keeping the Mac awake"
         }
     }
 }
 
 enum MenuBarIconRenderer {
-    private static let frameSize = NSSize(width: 18, height: 18)
+    private static let frameSize = NSSize(width: 20, height: 20)
+    private static let angleFontSize: CGFloat = 18
+    private static let arrowFontSize: CGFloat = 14
     private static let idleImage = makeImage(for: .idle)
-    private static let activeImage = makeImage(for: .active)
 
-    static func image(for state: MenuBarIconState) -> NSImage {
-        switch state {
-        case .idle:
-            idleImage
-        case .active:
-            activeImage
-        }
+    static func image(for _: MenuBarIconState) -> NSImage {
+        idleImage
     }
 
     private static func makeImage(for state: MenuBarIconState) -> NSImage {
-        guard
-            let symbol = NSImage(
-                systemSymbolName: state.symbolName,
-                accessibilityDescription: state.accessibilityDescription
-            )
-        else {
-            preconditionFailure("Missing required SF Symbol: \(state.symbolName)")
-        }
-
-        let configuredSymbol = symbol.withSymbolConfiguration(
-            NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
-        ) ?? symbol
-        let symbolSize = configuredSymbol.size
-        let scale = min(frameSize.width / symbolSize.width, frameSize.height / symbolSize.height)
-        let drawingSize = NSSize(width: symbolSize.width * scale, height: symbolSize.height * scale)
-        let drawingRect = NSRect(
-            x: (frameSize.width - drawingSize.width) / 2,
-            y: (frameSize.height - drawingSize.height) / 2,
-            width: drawingSize.width,
-            height: drawingSize.height
+        let glyph = NSMutableAttributedString(
+            string: state.glyph,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: angleFontSize, weight: .regular),
+                .foregroundColor: NSColor.black,
+                .kern: -0.75,
+            ]
+        )
+        glyph.addAttribute(
+            .font,
+            value: NSFont.systemFont(ofSize: arrowFontSize, weight: .light),
+            range: NSRange(location: 1, length: 1)
+        )
+        glyph.addAttribute(
+            .baselineOffset,
+            value: 1.0,
+            range: NSRange(location: 1, length: 1)
+        )
+        let glyphSize = glyph.size()
+        let drawingPoint = NSPoint(
+            x: (frameSize.width - glyphSize.width) / 2,
+            y: (frameSize.height - glyphSize.height) / 2
         )
 
         let image = NSImage(size: frameSize)
         image.lockFocus()
-        configuredSymbol.draw(in: drawingRect)
+        glyph.draw(at: drawingPoint)
         image.unlockFocus()
         image.isTemplate = true
         image.accessibilityDescription = state.accessibilityDescription
@@ -80,7 +68,16 @@ struct MenuBarLabel: View {
     @Bindable var controller: SessionController
 
     var body: some View {
-        Image(nsImage: MenuBarIconRenderer.image(for: MenuBarIconState(session: controller.session)))
-            .accessibilityLabel(controller.session.isActive ? "UpTil active" : "UpTil idle")
+        switch controller.session {
+        case .idle:
+            Image(nsImage: MenuBarIconRenderer.image(for: .idle))
+                .accessibilityLabel("UpTil idle")
+        case .indefinite:
+            Text("∞")
+                .font(.system(size: 14, weight: .regular))
+                .accessibilityLabel("UpTil is active indefinitely")
+        case let .timed(deadline):
+            MenuBarCountdownView(deadline: deadline)
+        }
     }
 }

@@ -7,19 +7,14 @@ import UpTilCore
 @MainActor
 @Suite("Menu presentation")
 struct MenuPresentationTests {
-    @Test("menu bar icons use equal fixed-size template frames")
-    func menuBarIconsUseEqualFixedSizeTemplateFrames() {
+    @Test("idle menu bar icon uses a fixed-size template frame")
+    func idleMenuBarIconUsesFixedSizeTemplateFrame() {
         let idle = MenuBarIconRenderer.image(for: .idle)
-        let active = MenuBarIconRenderer.image(for: .active)
 
         #expect(idle.size.width > 0)
         #expect(idle.size.height > 0)
-        #expect(idle.size == active.size)
         #expect(idle.isTemplate)
-        #expect(active.isTemplate)
         #expect(idle.accessibilityDescription?.isEmpty == false)
-        #expect(active.accessibilityDescription?.isEmpty == false)
-        #expect(idle.accessibilityDescription != active.accessibilityDescription)
     }
 
     @Test("idle presentation exposes the four fixed starts")
