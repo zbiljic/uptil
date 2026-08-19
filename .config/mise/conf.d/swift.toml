@@ -8,7 +8,14 @@ run = "swiftformat --lint ."
 
 [tasks."swift:lint"]
 description = "Lint Swift source code"
-run = "swiftlint lint --strict"
+run = '''
+if test -f Project.swift || test -f Tuist.swift || \
+    test -n "$(rg --files -g '*.swift' Sources Tests Packages 2>/dev/null | sed -n '1p')"; then
+    swiftlint lint --strict
+else
+    swiftlint version >/dev/null
+fi
+'''
 
 [tasks."core:build"]
 description = "Build the portable UpTilCore package"
