@@ -36,6 +36,20 @@ final class SessionController {
         return true
     }
 
+    @discardableResult
+    func start(until deadline: Date) -> Bool {
+        let wasIdle = !session.isActive
+        guard session.start(until: deadline, now: now()) else {
+            return false
+        }
+
+        if wasIdle {
+            keepAwakeService.activate()
+        }
+        scheduleExpiry()
+        return true
+    }
+
     func startIndefinitely() {
         let wasIdle = !session.isActive
         session.startIndefinitely()

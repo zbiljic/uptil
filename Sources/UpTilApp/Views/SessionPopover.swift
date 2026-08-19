@@ -112,6 +112,10 @@ enum SessionPresentationState: Equatable {
     var extensionChoices: [SessionExtensionChoice] {
         self == .timed ? SessionExtensionChoice.allCases : []
     }
+
+    var canStartUntil: Bool {
+        self == .idle
+    }
 }
 
 enum AppQuitAction {
@@ -125,12 +129,16 @@ enum AppQuitAction {
 struct SessionPopover: View {
     @Bindable var controller: SessionController
 
+    private var presentationState: SessionPresentationState {
+        SessionPresentationState(session: controller.session)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(AppMetadata.displayName)
                 .font(.headline)
 
-            switch SessionPresentationState(session: controller.session) {
+            switch presentationState {
             case .idle:
                 idleContent
             case .timed:
@@ -163,6 +171,10 @@ struct SessionPopover: View {
                     controller.start(for: choice.duration)
                 }
                 .accessibilityLabel(choice.accessibilityLabel)
+            }
+
+            if presentationState.canStartUntil {
+                UntilStartControl(controller: controller)
             }
 
             Button("Indefinitely") {
@@ -222,5 +234,66 @@ struct SessionPopover: View {
         }
 
         return CompactDurationFormatter.string(remaining: remaining)
+    }
+}
+
+private struct UntilStartControl: View {
+    @Bindable var controller: SessionController
+    @State private var selectedTime = Date().addingTimeInterval(60 * 60)
+
+    var body: some View {
+        let now = Date()
+        let deadline = WallClockDeadline.nextOccurrence(
+            of: selectedTime,
+            after: now,
+            calendar: .current
+        )
+
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Until")
+                .font(.subheadline)
+
+            DatePicker(
+                "Choose session end time",
+                selection: $selectedTime,
+                displayedComponents: .hourAndMinute
+            )
+            .labelsHidden()
+            .accessibilityLabel("Choose session end time")
+
+            if let deadline {
+                Text(UntilDeadlineFormatting.string(for: deadline, now: now))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Start Until") {
+                    startUntil()
+                }
+                .accessibilityLabel("Start session until selected time")
+            } else {
+                Text("Invalid end time")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Button("Start Until") {}
+                    .disabled(true)
+                    .accessibilityLabel("Start session until selected time")
+            }
+        }
+    }
+
+    private func startUntil() {
+        let currentTime = Date()
+        guard
+            let deadline = WallClockDeadline.nextOccurrence(
+                of: selectedTime,
+                after: currentTime,
+                calendar: .current
+            )
+        else {
+            return
+        }
+
+        controller.start(until: deadline)
     }
 }

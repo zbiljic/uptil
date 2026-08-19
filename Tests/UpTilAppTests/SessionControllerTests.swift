@@ -19,6 +19,71 @@ struct SessionControllerTests {
         #expect(fixture.scheduler.scheduledDeadlines == [startDate.addingTimeInterval(60)])
     }
 
+    @Test("absolute start from idle activates once and schedules its exact deadline")
+    func absoluteStartActivatesAndSchedules() {
+        let fixture = makeController()
+        let deadline = startDate.addingTimeInterval(90)
+
+        #expect(fixture.controller.start(until: deadline))
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.service.deactivationCount == 0)
+        #expect(fixture.controller.session == .timed(deadline: deadline))
+        #expect(fixture.scheduler.scheduledDeadlines == [deadline])
+    }
+
+    @Test("absolute start replaces timed deadline without reactivation")
+    func absoluteStartReplacesTimedDeadline() {
+        let fixture = makeController()
+        let replacement = startDate.addingTimeInterval(90)
+
+        #expect(fixture.controller.start(for: 10))
+        #expect(fixture.controller.start(until: replacement))
+
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.controller.session == .timed(deadline: replacement))
+        #expect(fixture.scheduler.scheduledDeadlines == [
+            startDate.addingTimeInterval(10),
+            replacement,
+        ])
+        #expect(fixture.scheduler.cancellationCount == 1)
+    }
+
+    @Test("absolute start replaces indefinite session without reactivation")
+    func absoluteStartReplacesIndefiniteSession() {
+        let fixture = makeController()
+        let deadline = startDate.addingTimeInterval(90)
+
+        fixture.controller.startIndefinitely()
+        #expect(fixture.controller.start(until: deadline))
+
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.controller.session == .timed(deadline: deadline))
+        #expect(fixture.scheduler.scheduledDeadlines == [deadline])
+    }
+
+    @Test("invalid absolute starts do not mutate lifecycle state")
+    func invalidAbsoluteStartDoesNothing() {
+        let invalidDeadlines = [
+            startDate,
+            startDate.addingTimeInterval(-1),
+            Date(timeIntervalSinceReferenceDate: .nan),
+            Date(timeIntervalSinceReferenceDate: .infinity),
+            Date(timeIntervalSinceReferenceDate: -.infinity),
+        ]
+
+        for deadline in invalidDeadlines {
+            let fixture = makeController()
+            fixture.controller.startIndefinitely()
+
+            #expect(!fixture.controller.start(until: deadline))
+            #expect(fixture.controller.session == .indefinite)
+            #expect(fixture.service.activationCount == 1)
+            #expect(fixture.service.deactivationCount == 0)
+            #expect(fixture.scheduler.scheduledDeadlines.isEmpty)
+            #expect(fixture.scheduler.cancellationCount == 0)
+        }
+    }
+
     @Test("indefinite start activates once and schedules nothing")
     func indefiniteStartActivatesWithoutScheduling() {
         let fixture = makeController()

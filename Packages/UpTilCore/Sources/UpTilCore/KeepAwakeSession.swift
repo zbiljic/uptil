@@ -51,6 +51,20 @@ public enum KeepAwakeSession: Equatable, Sendable {
         return true
     }
 
+    @discardableResult
+    public mutating func start(until deadline: Date, now: Date) -> Bool {
+        guard
+            now.timeIntervalSinceReferenceDate.isFinite,
+            deadline.timeIntervalSinceReferenceDate.isFinite,
+            deadline > now
+        else {
+            return false
+        }
+
+        self = .timed(deadline: deadline)
+        return true
+    }
+
     public mutating func startIndefinitely() {
         self = .indefinite
     }

@@ -26,6 +26,55 @@ struct KeepAwakeSessionTests {
         #expect(session == .timed(deadline: now.addingTimeInterval(90)))
     }
 
+    @Test("starts at an exact absolute deadline")
+    func absoluteStartPreservesDeadline() {
+        var session = KeepAwakeSession.idle
+        let deadline = now.addingTimeInterval(90)
+
+        let started = session.start(until: deadline, now: now)
+
+        #expect(started)
+        #expect(session == .timed(deadline: deadline))
+    }
+
+    @Test("absolute start replaces active states")
+    func absoluteStartReplacesActiveState() {
+        let deadline = now.addingTimeInterval(90)
+        var timed = KeepAwakeSession.timed(deadline: now.addingTimeInterval(10))
+        var indefinite = KeepAwakeSession.indefinite
+
+        let timedStarted = timed.start(until: deadline, now: now)
+        let indefiniteStarted = indefinite.start(until: deadline, now: now)
+
+        #expect(timedStarted)
+        #expect(indefiniteStarted)
+        #expect(timed == .timed(deadline: deadline))
+        #expect(indefinite == .timed(deadline: deadline))
+    }
+
+    @Test("rejects invalid absolute deadlines without changing state")
+    func invalidAbsoluteDeadlinesAreRejected() {
+        let invalidDates = [
+            now,
+            now.addingTimeInterval(-1),
+            Date(timeIntervalSinceReferenceDate: .nan),
+            Date(timeIntervalSinceReferenceDate: .infinity),
+            Date(timeIntervalSinceReferenceDate: -.infinity),
+        ]
+
+        for deadline in invalidDates {
+            var session = KeepAwakeSession.indefinite
+
+            #expect(session.start(until: deadline, now: now) == false)
+            #expect(session == .indefinite)
+        }
+
+        var session = KeepAwakeSession.indefinite
+        let invalidNow = Date(timeIntervalSinceReferenceDate: .nan)
+        #expect(session.start(until: now.addingTimeInterval(1), now: invalidNow) == false)
+        #expect(session == .indefinite)
+    }
+
     @Test("starts an indefinite session")
     func indefiniteStart() {
         var session = KeepAwakeSession.idle

@@ -23,6 +23,7 @@ struct MenuPresentationTests {
 
         #expect(presentation.startChoices == SessionStartChoice.allCases)
         #expect(presentation.startChoices.map(\.duration) == [900, 1800, 3600, 7200])
+        #expect(presentation.canStartUntil)
         #expect(presentation.extensionChoices.isEmpty)
     }
 
@@ -31,6 +32,7 @@ struct MenuPresentationTests {
         let presentation = SessionPresentationState(session: .timed(deadline: Date()))
 
         #expect(presentation.startChoices.isEmpty)
+        #expect(!presentation.canStartUntil)
         #expect(presentation.extensionChoices == SessionExtensionChoice.allCases)
         #expect(presentation.extensionChoices.map(\.duration) == [300, 900, 1800, 3600])
     }
@@ -40,6 +42,7 @@ struct MenuPresentationTests {
         let presentation = SessionPresentationState(session: .indefinite)
 
         #expect(presentation.startChoices.isEmpty)
+        #expect(!presentation.canStartUntil)
         #expect(presentation.extensionChoices.isEmpty)
     }
 
@@ -54,6 +57,79 @@ struct MenuPresentationTests {
                 timeZone: timeZone
             ) == "UpTil 00:00"
         )
+    }
+
+    @Test("until preview distinguishes today and tomorrow")
+    func untilPreviewDistinguishesDay() throws {
+        let timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 19,
+            hour: 10
+        )))
+        let today = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 19,
+            hour: 18,
+            minute: 30
+        )))
+        let tomorrow = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 20,
+            hour: 8,
+            minute: 15
+        )))
+
+        #expect(UntilDeadlineFormatting.string(
+            for: today,
+            now: now,
+            calendar: calendar,
+            locale: Locale(identifier: "en_GB"),
+            timeZone: timeZone
+        ) == "Today, 18:30")
+        #expect(UntilDeadlineFormatting.string(
+            for: tomorrow,
+            now: now,
+            calendar: calendar,
+            locale: Locale(identifier: "en_GB"),
+            timeZone: timeZone
+        ) == "Tomorrow, 08:15")
+    }
+
+    @Test("until preview follows a twelve-hour locale")
+    func untilPreviewUsesInjectedLocale() throws {
+        let timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let now = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 19,
+            hour: 10
+        )))
+        let deadline = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 19,
+            hour: 18,
+            minute: 30
+        )))
+        let preview = UntilDeadlineFormatting.string(
+            for: deadline,
+            now: now,
+            calendar: calendar,
+            locale: Locale(identifier: "en_US"),
+            timeZone: timeZone
+        )
+
+        #expect(preview.hasPrefix("Today, "))
+        #expect(preview.contains("6:30"))
+        #expect(preview.contains("PM"))
     }
 
     @Test("quit shuts down before invoking termination")
