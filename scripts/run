@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_root=$(dirname "$script_directory")
+app_path="$project_root/Derived/Build/Products/Debug/UpTil.app"
+
+cd "$project_root"
+mise run app:build
+
+if ! test -d "$app_path"; then
+    echo "UpTil build not found at $app_path" >&2
+    exit 1
+fi
+
+pkill -x UpTil 2>/dev/null || true
+open "$app_path"
