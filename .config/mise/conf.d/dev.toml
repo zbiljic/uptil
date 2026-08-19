@@ -1,0 +1,37 @@
+[tasks.setup]
+description = "Install pinned development tools"
+run = "mise install"
+
+[tasks.fmt]
+description = "Format project source code"
+depends = ["swift:format"]
+
+[tasks."fmt:check"]
+description = "Check source formatting"
+depends = ["swift:format-check"]
+
+[tasks.lint]
+description = "Run static analysis"
+depends = ["swift:lint"]
+
+[tasks.generate]
+description = "Generate the Xcode project"
+depends = ["app:generate"]
+
+[tasks.build]
+description = "Build the Swift package and macOS application"
+depends = ["core:build", "app:build"]
+
+[tasks.test]
+description = "Run all tests"
+alias = "t"
+depends = ["core:test", "app:test"]
+
+[tasks.check]
+description = "Run the full local validation suite"
+depends = ["fmt:check", "lint", "test"]
+
+[tasks."pre-commit"]
+description = "Run the full local development gate"
+alias = "prk"
+depends = ["check"]
