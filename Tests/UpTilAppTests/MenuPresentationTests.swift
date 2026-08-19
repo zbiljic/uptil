@@ -17,6 +17,18 @@ struct MenuPresentationTests {
         #expect(idle.accessibilityDescription?.isEmpty == false)
     }
 
+    @Test("active menu bar labels use paired angles and a template image")
+    func activeMenuBarLabelsUsePairedAnglesAndTemplateImage() {
+        #expect(MenuBarActiveLabelContent.countdown("42m").display == "⟩42m⟨")
+        #expect(MenuBarActiveLabelContent.indefinite.display == "⟩∞⟨")
+
+        let indefinite = MenuBarActiveLabelRenderer.image(for: .indefinite)
+
+        #expect(indefinite.size.width > 0)
+        #expect(indefinite.size.height == 20)
+        #expect(indefinite.isTemplate)
+    }
+
     @Test("idle presentation exposes the four fixed starts")
     func idlePresentationUsesFixedStartChoices() {
         let presentation = SessionPresentationState(session: .idle)

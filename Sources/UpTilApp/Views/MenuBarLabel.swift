@@ -73,8 +73,7 @@ struct MenuBarLabel: View {
             Image(nsImage: MenuBarIconRenderer.image(for: .idle))
                 .accessibilityLabel("UpTil idle")
         case .indefinite:
-            Text("∞")
-                .font(.system(size: 14, weight: .regular))
+            Image(nsImage: MenuBarActiveLabelRenderer.image(for: .indefinite))
                 .accessibilityLabel("UpTil is active indefinitely")
         case let .timed(deadline):
             MenuBarCountdownView(deadline: deadline)

@@ -3,15 +3,40 @@ import Foundation
 import SwiftUI
 import UpTilCore
 
-enum MenuBarCountdownRenderer {
+enum MenuBarActiveLabelContent {
+    case countdown(String)
+    case indefinite
+
+    var display: String {
+        "⟩\(center)⟨"
+    }
+
+    fileprivate var center: String {
+        switch self {
+        case let .countdown(duration):
+            duration
+        case .indefinite:
+            "∞"
+        }
+    }
+
+    fileprivate var centerFont: NSFont {
+        switch self {
+        case .countdown:
+            NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        case .indefinite:
+            NSFont.systemFont(ofSize: 14, weight: .regular)
+        }
+    }
+}
+
+enum MenuBarActiveLabelRenderer {
     private static let frameHeight: CGFloat = 20
     private static let angleFontSize: CGFloat = 18
-    private static let durationFontSize: CGFloat = 12
 
-    static func image(duration: String) -> NSImage {
-        let display = "⟩\(duration)⟨"
+    static func image(for content: MenuBarActiveLabelContent) -> NSImage {
         let glyph = NSMutableAttributedString(
-            string: display,
+            string: content.display,
             attributes: [
                 .font: NSFont.systemFont(ofSize: angleFontSize, weight: .regular),
                 .foregroundColor: NSColor.black,
@@ -20,13 +45,10 @@ enum MenuBarCountdownRenderer {
         )
         glyph.addAttributes(
             [
-                .font: NSFont.monospacedDigitSystemFont(
-                    ofSize: durationFontSize,
-                    weight: .regular
-                ),
+                .font: content.centerFont,
                 .baselineOffset: 1.0,
             ],
-            range: NSRange(location: 1, length: duration.utf16.count)
+            range: NSRange(location: 1, length: content.center.utf16.count)
         )
 
         let glyphSize = glyph.size()
@@ -60,7 +82,7 @@ struct MenuBarCountdownView: View {
         let remaining = deadline.timeIntervalSince(calculationDate)
         let duration = MenuBarCountdownFormatting.durationString(remaining: remaining)
 
-        Image(nsImage: MenuBarCountdownRenderer.image(duration: duration))
+        Image(nsImage: MenuBarActiveLabelRenderer.image(for: .countdown(duration)))
             .accessibilityLabel("UpTil active, \(duration) remaining")
             .task(id: deadline) {
                 await refreshClock()
