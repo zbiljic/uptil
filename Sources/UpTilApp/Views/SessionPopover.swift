@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import UpTilCore
 
-enum SessionStartChoice: CaseIterable, Equatable, Identifiable {
+enum QuickDurationChoice: CaseIterable, Equatable, Identifiable {
     case fifteenMinutes
     case thirtyMinutes
     case oneHour
@@ -38,53 +38,63 @@ enum SessionStartChoice: CaseIterable, Equatable, Identifiable {
         }
     }
 
-    var accessibilityLabel: String {
+    var sessionDurationDescription: String {
         switch self {
         case .fifteenMinutes:
-            "Start a 15 minute session"
+            "15 minute"
         case .thirtyMinutes:
-            "Start a 30 minute session"
+            "30 minute"
         case .oneHour:
-            "Start a 1 hour session"
+            "1 hour"
         case .twoHours:
-            "Start a 2 hour session"
+            "2 hour"
+        }
+    }
+
+    var durationDescription: String {
+        switch self {
+        case .fifteenMinutes:
+            "15 minutes"
+        case .thirtyMinutes:
+            "30 minutes"
+        case .oneHour:
+            "1 hour"
+        case .twoHours:
+            "2 hours"
         }
     }
 }
 
-enum SessionExtensionChoice: CaseIterable, Equatable, Identifiable {
-    case fiveMinutes
-    case fifteenMinutes
-    case thirtyMinutes
-    case oneHour
+enum QuickDurationAction: Equatable {
+    case start
+    case extend
 
-    var id: Self {
-        self
-    }
-
-    var duration: TimeInterval {
+    func title(for choice: QuickDurationChoice) -> String {
         switch self {
-        case .fiveMinutes:
-            5 * 60
-        case .fifteenMinutes:
-            15 * 60
-        case .thirtyMinutes:
-            30 * 60
-        case .oneHour:
-            60 * 60
+        case .start:
+            choice.title
+        case .extend:
+            "+\(choice.title)"
         }
     }
 
-    var title: String {
+    func accessibilityLabel(for choice: QuickDurationChoice) -> String {
         switch self {
-        case .fiveMinutes:
-            "+5m"
-        case .fifteenMinutes:
-            "+15m"
-        case .thirtyMinutes:
-            "+30m"
-        case .oneHour:
-            "+1h"
+        case .start:
+            "Start a \(choice.sessionDurationDescription) session"
+        case .extend:
+            "Extend the session by \(choice.durationDescription)"
+        }
+    }
+
+    @discardableResult
+    @MainActor
+    func perform(choice: QuickDurationChoice, controller: SessionController) -> Bool {
+        switch self {
+        case .start:
+            controller.start(for: choice.duration)
+        case .extend:
+            controller.extend(by: choice.duration)
         }
     }
 }
@@ -105,16 +115,27 @@ enum SessionPresentationState: Equatable {
         }
     }
 
-    var startChoices: [SessionStartChoice] {
-        self == .idle ? SessionStartChoice.allCases : []
+    var quickDurationAction: QuickDurationAction? {
+        switch self {
+        case .idle:
+            .start
+        case .timed:
+            .extend
+        case .indefinite:
+            nil
+        }
     }
 
-    var extensionChoices: [SessionExtensionChoice] {
-        self == .timed ? SessionExtensionChoice.allCases : []
+    var quickDurationChoices: [QuickDurationChoice] {
+        quickDurationAction == nil ? [] : QuickDurationChoice.allCases
     }
 
     var canStartUntil: Bool {
         self == .idle
+    }
+
+    var canStop: Bool {
+        self != .idle
     }
 }
 
@@ -138,13 +159,17 @@ struct SessionPopover: View {
             Text(AppMetadata.displayName)
                 .font(.headline)
 
+            statusContent
+
+            if let action = presentationState.quickDurationAction {
+                quickDurationControls(action: action)
+            }
+
             switch presentationState {
             case .idle:
-                idleContent
-            case .timed:
-                timedContent
-            case .indefinite:
-                indefiniteContent
+                idleSecondaryControls
+            case .timed, .indefinite:
+                stopControl
             }
 
             Divider()
@@ -158,24 +183,81 @@ struct SessionPopover: View {
             .accessibilityLabel("Quit UpTil")
         }
         .padding(16)
-        .frame(width: 250)
+        .frame(width: 300)
     }
 
-    private var idleContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
+    private var statusContent: some View {
+        Group {
+            switch presentationState {
+            case .idle:
+                idleStatus
+            case .timed:
+                timedStatus
+            case .indefinite:
+                indefiniteStatus
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
+    }
+
+    private var idleStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Keep your Mac awake")
+                .font(.title2)
+
+            Text("Choose a duration to begin")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var timedStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            TimelineView(.animation(minimumInterval: 1)) { context in
+                Text(remainingText(at: context.date))
+                    .font(.title2)
+                    .monospacedDigit()
+                    .accessibilityLabel("\(remainingText(at: context.date)) remaining")
+            }
+
+            if let deadline = controller.session.deadline {
+                Text(EndTimeFormatting.string(for: deadline))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Session ends at \(EndTimeFormatting.string(for: deadline))")
+            }
+        }
+    }
+
+    private var indefiniteStatus: some View {
+        Label("∞  Indefinitely", systemImage: "infinity")
+            .font(.title2)
+            .accessibilityLabel("Running indefinitely")
+    }
+
+    private func quickDurationControls(action: QuickDurationAction) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(action == .start ? "Start for" : "Add time")
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
 
-            ForEach(SessionStartChoice.allCases) { choice in
-                Button(choice.title) {
-                    controller.start(for: choice.duration)
+            HStack(spacing: 8) {
+                ForEach(presentationState.quickDurationChoices) { choice in
+                    Button {
+                        action.perform(choice: choice, controller: controller)
+                    } label: {
+                        Text(action.title(for: choice))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .accessibilityLabel(action.accessibilityLabel(for: choice))
                 }
-                .accessibilityLabel(choice.accessibilityLabel)
             }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+        }
+    }
 
-            if presentationState.canStartUntil {
-                UntilStartControl(controller: controller)
-            }
+    private var idleSecondaryControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            UntilStartControl(controller: controller)
 
             Button("Indefinitely") {
                 controller.startIndefinitely()
@@ -184,47 +266,12 @@ struct SessionPopover: View {
         }
     }
 
-    private var timedContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let deadline = controller.session.deadline {
-                Text(EndTimeFormatting.string(for: deadline))
-                    .font(.headline)
-                    .accessibilityLabel("Session ends at \(EndTimeFormatting.string(for: deadline))")
-            }
-
-            TimelineView(.animation(minimumInterval: 1)) { context in
-                Text(remainingText(at: context.date))
-                    .font(.title2)
-                    .monospacedDigit()
-                    .accessibilityLabel("\(remainingText(at: context.date)) remaining")
-            }
-
-            HStack(spacing: 6) {
-                ForEach(SessionExtensionChoice.allCases) { choice in
-                    Button(choice.title) {
-                        controller.extend(by: choice.duration)
-                    }
-                    .accessibilityLabel("Extend by \(choice.title.dropFirst())")
-                }
-            }
-
+    @ViewBuilder private var stopControl: some View {
+        if presentationState.canStop {
             Button("Stop", role: .destructive) {
                 controller.stop()
             }
             .accessibilityLabel("Stop the active session")
-        }
-    }
-
-    private var indefiniteContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Label("∞  Indefinitely", systemImage: "infinity")
-                .font(.headline)
-                .accessibilityLabel("Running indefinitely")
-
-            Button("Stop", role: .destructive) {
-                controller.stop()
-            }
-            .accessibilityLabel("Stop the indefinite session")
         }
     }
 

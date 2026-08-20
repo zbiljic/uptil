@@ -29,33 +29,103 @@ struct MenuPresentationTests {
         #expect(indefinite.isTemplate)
     }
 
-    @Test("idle presentation exposes the four fixed starts")
-    func idlePresentationUsesFixedStartChoices() {
+    @Test("idle presentation exposes four fixed quick starts")
+    func idlePresentationUsesFixedQuickChoices() {
         let presentation = SessionPresentationState(session: .idle)
 
-        #expect(presentation.startChoices == SessionStartChoice.allCases)
-        #expect(presentation.startChoices.map(\.duration) == [900, 1800, 3600, 7200])
+        #expect(presentation.quickDurationAction == .start)
+        #expect(presentation.quickDurationChoices == QuickDurationChoice.allCases)
+        #expect(presentation.quickDurationChoices.map(\.duration) == [900, 1800, 3600, 7200])
         #expect(presentation.canStartUntil)
-        #expect(presentation.extensionChoices.isEmpty)
+        #expect(!presentation.canStop)
     }
 
-    @Test("timed presentation exposes additive extension choices")
-    func timedPresentationUsesFixedExtensionChoices() {
-        let presentation = SessionPresentationState(session: .timed(deadline: Date()))
+    @Test("timed presentation reuses quick choice identity and order")
+    func timedPresentationUsesStableQuickChoices() {
+        let idle = SessionPresentationState(session: .idle)
+        let timed = SessionPresentationState(session: .timed(deadline: Date()))
 
-        #expect(presentation.startChoices.isEmpty)
-        #expect(!presentation.canStartUntil)
-        #expect(presentation.extensionChoices == SessionExtensionChoice.allCases)
-        #expect(presentation.extensionChoices.map(\.duration) == [300, 900, 1800, 3600])
+        #expect(timed.quickDurationAction == .extend)
+        #expect(timed.quickDurationChoices.map(\.id) == idle.quickDurationChoices.map(\.id))
+        #expect(timed.quickDurationChoices.map(\.duration) == idle.quickDurationChoices.map(\.duration))
+        #expect(timed.canStop)
     }
 
-    @Test("indefinite presentation has no extension actions")
-    func indefinitePresentationHidesExtensions() {
+    @Test("quick durations do not expose a five minute choice")
+    func quickDurationsExcludeFiveMinutes() {
+        let idle = SessionPresentationState(session: .idle)
+        let timed = SessionPresentationState(session: .timed(deadline: Date()))
+
+        #expect(!idle.quickDurationChoices.map(\.duration).contains(300))
+        #expect(!timed.quickDurationChoices.map(\.duration).contains(300))
+    }
+
+    @Test("indefinite presentation has no duration actions")
+    func indefinitePresentationHidesQuickDurations() {
         let presentation = SessionPresentationState(session: .indefinite)
 
-        #expect(presentation.startChoices.isEmpty)
+        #expect(presentation.quickDurationAction == nil)
+        #expect(presentation.quickDurationChoices.isEmpty)
         #expect(!presentation.canStartUntil)
-        #expect(presentation.extensionChoices.isEmpty)
+        #expect(presentation.canStop)
+    }
+
+    @Test("quick duration titles reflect the current action")
+    func quickDurationTitlesReflectAction() {
+        let choices = QuickDurationChoice.allCases
+
+        #expect(choices.map { QuickDurationAction.start.title(for: $0) } == ["15m", "30m", "1h", "2h"])
+        #expect(choices.map { QuickDurationAction.extend.title(for: $0) } == ["+15m", "+30m", "+1h", "+2h"])
+    }
+
+    @Test("quick duration accessibility labels describe full actions")
+    func quickDurationAccessibilityLabelsDescribeActions() {
+        let choices = QuickDurationChoice.allCases
+
+        #expect(choices.map { QuickDurationAction.start.accessibilityLabel(for: $0) } == [
+            "Start a 15 minute session",
+            "Start a 30 minute session",
+            "Start a 1 hour session",
+            "Start a 2 hour session",
+        ])
+        #expect(choices.map { QuickDurationAction.extend.accessibilityLabel(for: $0) } == [
+            "Extend the session by 15 minutes",
+            "Extend the session by 30 minutes",
+            "Extend the session by 1 hour",
+            "Extend the session by 2 hours",
+        ])
+    }
+
+    @Test("Until remains available only while idle")
+    func untilAvailabilityRemainsIdleOnly() {
+        #expect(SessionPresentationState(session: .idle).canStartUntil)
+        #expect(!SessionPresentationState(session: .timed(deadline: Date())).canStartUntil)
+        #expect(!SessionPresentationState(session: .indefinite).canStartUntil)
+    }
+
+    @Test("repeated quick action routing extends the stored deadline")
+    func repeatedQuickActionRoutingIsAdditive() {
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let service = FakeKeepAwakeService()
+        let scheduler = ManualExpiryScheduler()
+        let controller = SessionController(
+            keepAwakeService: service,
+            expiryScheduler: scheduler
+        ) { now }
+        let choice = QuickDurationChoice.fifteenMinutes
+
+        #expect(QuickDurationAction.start.perform(choice: choice, controller: controller))
+        for _ in 0 ..< 3 {
+            #expect(QuickDurationAction.extend.perform(choice: choice, controller: controller))
+        }
+
+        let expectedDeadline = now.addingTimeInterval(3600)
+        #expect(controller.session == .timed(deadline: expectedDeadline))
+        #expect(service.activationCount == 1)
+        #expect(scheduler.scheduledDeadlines.count == 4)
+        #expect(scheduler.scheduledDeadlines.last == expectedDeadline)
+        #expect(scheduler.cancellationCount == 3)
+        #expect(service.deactivationCount == 0)
     }
 
     @Test("end time formatting is deterministic for an injected locale and time zone")
