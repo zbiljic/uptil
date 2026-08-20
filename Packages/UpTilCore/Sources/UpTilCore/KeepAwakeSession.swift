@@ -84,6 +84,36 @@ public enum KeepAwakeSession: Equatable, Sendable {
         }
     }
 
+    public func canShorten(by duration: TimeInterval, at now: Date) -> Bool {
+        guard
+            duration.isFinite,
+            duration > 0,
+            now.timeIntervalSinceReferenceDate.isFinite
+        else {
+            return false
+        }
+
+        switch self {
+        case .idle, .indefinite:
+            return false
+        case let .timed(deadline):
+            let shortenedDeadline = deadline.addingTimeInterval(-duration)
+            return deadline.timeIntervalSinceReferenceDate.isFinite
+                && shortenedDeadline.timeIntervalSinceReferenceDate.isFinite
+                && shortenedDeadline > now
+        }
+    }
+
+    @discardableResult
+    public mutating func shorten(by duration: TimeInterval, at now: Date) -> Bool {
+        guard canShorten(by: duration, at: now), case let .timed(deadline) = self else {
+            return false
+        }
+
+        self = .timed(deadline: deadline.addingTimeInterval(-duration))
+        return true
+    }
+
     @discardableResult
     public mutating func expireIfNeeded(at now: Date) -> Bool {
         guard isExpired(at: now) else {

@@ -65,9 +65,21 @@ enum QuickDurationChoice: CaseIterable, Equatable, Identifiable {
     }
 }
 
-enum QuickDurationAction: Equatable {
+enum QuickDurationAction: Hashable {
     case start
     case extend
+    case shorten
+
+    var sectionTitle: String {
+        switch self {
+        case .start:
+            "Start for"
+        case .extend:
+            "Add time"
+        case .shorten:
+            "Remove time"
+        }
+    }
 
     func title(for choice: QuickDurationChoice) -> String {
         switch self {
@@ -75,6 +87,8 @@ enum QuickDurationAction: Equatable {
             choice.title
         case .extend:
             "+\(choice.title)"
+        case .shorten:
+            "-\(choice.title)"
         }
     }
 
@@ -84,6 +98,21 @@ enum QuickDurationAction: Equatable {
             "Start a \(choice.sessionDurationDescription) session"
         case .extend:
             "Extend the session by \(choice.durationDescription)"
+        case .shorten:
+            "Shorten the session by \(choice.durationDescription)"
+        }
+    }
+
+    func isEnabled(
+        for choice: QuickDurationChoice,
+        session: KeepAwakeSession,
+        at date: Date
+    ) -> Bool {
+        switch self {
+        case .start, .extend:
+            true
+        case .shorten:
+            session.canShorten(by: choice.duration, at: date)
         }
     }
 
@@ -95,6 +124,8 @@ enum QuickDurationAction: Equatable {
             controller.start(for: choice.duration)
         case .extend:
             controller.extend(by: choice.duration)
+        case .shorten:
+            controller.shorten(by: choice.duration)
         }
     }
 }
@@ -115,19 +146,19 @@ enum SessionPresentationState: Equatable {
         }
     }
 
-    var quickDurationAction: QuickDurationAction? {
+    var quickDurationActions: [QuickDurationAction] {
         switch self {
         case .idle:
-            .start
+            [.start]
         case .timed:
-            .extend
+            [.extend, .shorten]
         case .indefinite:
-            nil
+            []
         }
     }
 
     var quickDurationChoices: [QuickDurationChoice] {
-        quickDurationAction == nil ? [] : QuickDurationChoice.allCases
+        quickDurationActions.isEmpty ? [] : QuickDurationChoice.allCases
     }
 
     var canStartUntil: Bool {
@@ -161,8 +192,8 @@ struct SessionPopover: View {
 
             statusContent
 
-            if let action = presentationState.quickDurationAction {
-                quickDurationControls(action: action)
+            ForEach(presentationState.quickDurationActions, id: \.self) { action in
+                quickDurationSection(action: action)
             }
 
             switch presentationState {
@@ -233,9 +264,20 @@ struct SessionPopover: View {
             .accessibilityLabel("Running indefinitely")
     }
 
-    private func quickDurationControls(action: QuickDurationAction) -> some View {
+    @ViewBuilder
+    private func quickDurationSection(action: QuickDurationAction) -> some View {
+        if action == .shorten {
+            TimelineView(.animation(minimumInterval: 1)) { context in
+                quickDurationControls(action: action, at: context.date)
+            }
+        } else {
+            quickDurationControls(action: action, at: Date())
+        }
+    }
+
+    private func quickDurationControls(action: QuickDurationAction, at date: Date) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(action == .start ? "Start for" : "Add time")
+            Text(action.sectionTitle)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -248,6 +290,11 @@ struct SessionPopover: View {
                             .frame(maxWidth: .infinity)
                     }
                     .accessibilityLabel(action.accessibilityLabel(for: choice))
+                    .disabled(!action.isEnabled(
+                        for: choice,
+                        session: controller.session,
+                        at: date
+                    ))
                 }
             }
             .buttonStyle(.bordered)

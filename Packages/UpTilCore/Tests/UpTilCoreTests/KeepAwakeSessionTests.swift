@@ -163,6 +163,127 @@ struct KeepAwakeSessionTests {
         }
     }
 
+    @Test("shortens from the existing deadline")
+    func shorteningUsesExistingDeadline() {
+        var session = KeepAwakeSession.timed(deadline: now.addingTimeInterval(120))
+
+        #expect(session.canShorten(by: 30, at: now))
+        let shortened = session.shorten(by: 30, at: now)
+
+        #expect(shortened)
+        #expect(session.deadline == now.addingTimeInterval(90))
+    }
+
+    @Test("repeated shortenings accumulate exactly")
+    func repeatedShorteningsAccumulate() {
+        var session = KeepAwakeSession.timed(deadline: now.addingTimeInterval(120))
+
+        let shortenedByThirty = session.shorten(by: 30, at: now)
+        let shortenedByFortyFive = session.shorten(by: 45, at: now)
+
+        #expect(shortenedByThirty)
+        #expect(shortenedByFortyFive)
+        #expect(session.deadline == now.addingTimeInterval(45))
+    }
+
+    @Test("shortening requires a deadline strictly later than now")
+    func shorteningRequiresRemainingTimeAboveDuration() {
+        var strictlyAbove = KeepAwakeSession.timed(deadline: now.addingTimeInterval(30.001))
+        var equal = KeepAwakeSession.timed(deadline: now.addingTimeInterval(30))
+        var below = KeepAwakeSession.timed(deadline: now.addingTimeInterval(29.999))
+        let equalOriginal = equal
+        let belowOriginal = below
+
+        #expect(strictlyAbove.canShorten(by: 30, at: now))
+        let shortenedAbove = strictlyAbove.shorten(by: 30, at: now)
+        let shortenedEqual = equal.shorten(by: 30, at: now)
+        let shortenedBelow = below.shorten(by: 30, at: now)
+
+        #expect(shortenedAbove)
+        #expect(strictlyAbove.deadline == now.addingTimeInterval(0.001))
+        #expect(!equal.canShorten(by: 30, at: now))
+        #expect(!shortenedEqual)
+        #expect(equal == equalOriginal)
+        #expect(!below.canShorten(by: 30, at: now))
+        #expect(!shortenedBelow)
+        #expect(below == belowOriginal)
+    }
+
+    @Test("shortening is a no-op for idle and indefinite sessions")
+    func shorteningOnlyAffectsTimedSessions() {
+        var idle = KeepAwakeSession.idle
+        var indefinite = KeepAwakeSession.indefinite
+
+        #expect(!idle.canShorten(by: 30, at: now))
+        let shortenedIdle = idle.shorten(by: 30, at: now)
+        let shortenedIndefinite = indefinite.shorten(by: 30, at: now)
+
+        #expect(!shortenedIdle)
+        #expect(!indefinite.canShorten(by: 30, at: now))
+        #expect(!shortenedIndefinite)
+        #expect(idle == .idle)
+        #expect(indefinite == .indefinite)
+    }
+
+    @Test("rejects invalid shortening inputs without changing state")
+    func invalidShorteningInputsAreRejected() {
+        let invalidDurations = [TimeInterval(0), -1, .nan, .infinity, -.infinity]
+
+        for duration in invalidDurations {
+            var session = KeepAwakeSession.timed(deadline: now.addingTimeInterval(60))
+            let original = session
+
+            #expect(!session.canShorten(by: duration, at: now))
+            let shortened = session.shorten(by: duration, at: now)
+
+            #expect(!shortened)
+            #expect(session == original)
+        }
+
+        for invalidNow in [
+            Date(timeIntervalSinceReferenceDate: .nan),
+            Date(timeIntervalSinceReferenceDate: .infinity),
+            Date(timeIntervalSinceReferenceDate: -.infinity),
+        ] {
+            var session = KeepAwakeSession.timed(deadline: now.addingTimeInterval(60))
+            let original = session
+
+            #expect(!session.canShorten(by: 30, at: invalidNow))
+            let shortened = session.shorten(by: 30, at: invalidNow)
+
+            #expect(!shortened)
+            #expect(session == original)
+        }
+
+        let nanDeadline = Date(timeIntervalSinceReferenceDate: .nan)
+        var nanSession = KeepAwakeSession.timed(deadline: nanDeadline)
+        let originalNanBitPattern = nanDeadline.timeIntervalSinceReferenceDate.bitPattern
+
+        #expect(!nanSession.canShorten(by: 30, at: now))
+        let shortenedNan = nanSession.shorten(by: 30, at: now)
+
+        #expect(!shortenedNan)
+        if case let .timed(deadline) = nanSession {
+            #expect(deadline.timeIntervalSinceReferenceDate.bitPattern == originalNanBitPattern)
+        } else {
+            Issue.record("NaN deadline session changed state")
+        }
+
+        for invalidDeadline in [
+            Date(timeIntervalSinceReferenceDate: .infinity),
+            Date(timeIntervalSinceReferenceDate: -.infinity),
+        ] {
+            var session = KeepAwakeSession.timed(deadline: invalidDeadline)
+            let original = session
+
+            #expect(!session.canShorten(by: 30, at: now))
+            let shortened = session.shorten(by: 30, at: now)
+
+            #expect(!shortened)
+            #expect(session == original)
+        }
+    }
+
     @Test("is active just before its deadline")
     func beforeDeadlineIsActive() {
         let session = KeepAwakeSession.timed(deadline: now)

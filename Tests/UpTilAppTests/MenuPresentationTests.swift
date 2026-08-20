@@ -33,7 +33,7 @@ struct MenuPresentationTests {
     func idlePresentationUsesFixedQuickChoices() {
         let presentation = SessionPresentationState(session: .idle)
 
-        #expect(presentation.quickDurationAction == .start)
+        #expect(presentation.quickDurationActions == [.start])
         #expect(presentation.quickDurationChoices == QuickDurationChoice.allCases)
         #expect(presentation.quickDurationChoices.map(\.duration) == [900, 1800, 3600, 7200])
         #expect(presentation.canStartUntil)
@@ -45,7 +45,7 @@ struct MenuPresentationTests {
         let idle = SessionPresentationState(session: .idle)
         let timed = SessionPresentationState(session: .timed(deadline: Date()))
 
-        #expect(timed.quickDurationAction == .extend)
+        #expect(timed.quickDurationActions == [.extend, .shorten])
         #expect(timed.quickDurationChoices.map(\.id) == idle.quickDurationChoices.map(\.id))
         #expect(timed.quickDurationChoices.map(\.duration) == idle.quickDurationChoices.map(\.duration))
         #expect(timed.canStop)
@@ -64,7 +64,7 @@ struct MenuPresentationTests {
     func indefinitePresentationHidesQuickDurations() {
         let presentation = SessionPresentationState(session: .indefinite)
 
-        #expect(presentation.quickDurationAction == nil)
+        #expect(presentation.quickDurationActions.isEmpty)
         #expect(presentation.quickDurationChoices.isEmpty)
         #expect(!presentation.canStartUntil)
         #expect(presentation.canStop)
@@ -76,6 +76,10 @@ struct MenuPresentationTests {
 
         #expect(choices.map { QuickDurationAction.start.title(for: $0) } == ["15m", "30m", "1h", "2h"])
         #expect(choices.map { QuickDurationAction.extend.title(for: $0) } == ["+15m", "+30m", "+1h", "+2h"])
+        #expect(choices.map { QuickDurationAction.shorten.title(for: $0) } == ["-15m", "-30m", "-1h", "-2h"])
+        #expect(QuickDurationAction.start.sectionTitle == "Start for")
+        #expect(QuickDurationAction.extend.sectionTitle == "Add time")
+        #expect(QuickDurationAction.shorten.sectionTitle == "Remove time")
     }
 
     @Test("quick duration accessibility labels describe full actions")
@@ -94,6 +98,27 @@ struct MenuPresentationTests {
             "Extend the session by 1 hour",
             "Extend the session by 2 hours",
         ])
+        #expect(choices.map { QuickDurationAction.shorten.accessibilityLabel(for: $0) } == [
+            "Shorten the session by 15 minutes",
+            "Shorten the session by 30 minutes",
+            "Shorten the session by 1 hour",
+            "Shorten the session by 2 hours",
+        ])
+    }
+
+    @Test("quick duration enabled state enforces strict shortening boundaries")
+    func quickDurationEnabledStateUsesDomainBoundary() {
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let choice = QuickDurationChoice.fifteenMinutes
+        let above = KeepAwakeSession.timed(deadline: now.addingTimeInterval(choice.duration + 0.001))
+        let equal = KeepAwakeSession.timed(deadline: now.addingTimeInterval(choice.duration))
+
+        #expect(QuickDurationAction.start.isEnabled(for: choice, session: .idle, at: now))
+        #expect(QuickDurationAction.extend.isEnabled(for: choice, session: above, at: now))
+        #expect(QuickDurationAction.shorten.isEnabled(for: choice, session: above, at: now))
+        #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: equal, at: now))
+        #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: .idle, at: now))
+        #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: .indefinite, at: now))
     }
 
     @Test("Until remains available only while idle")
@@ -126,6 +151,33 @@ struct MenuPresentationTests {
         #expect(scheduler.scheduledDeadlines.last == expectedDeadline)
         #expect(scheduler.cancellationCount == 3)
         #expect(service.deactivationCount == 0)
+    }
+
+    @Test("quick shorten action routes through controller and replaces schedule")
+    func quickShortenActionRoutesThroughController() {
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let service = FakeKeepAwakeService()
+        let scheduler = ManualExpiryScheduler()
+        let controller = SessionController(
+            keepAwakeService: service,
+            expiryScheduler: scheduler
+        ) { now }
+
+        #expect(controller.start(for: 3600))
+        #expect(QuickDurationAction.shorten.perform(
+            choice: .fifteenMinutes,
+            controller: controller
+        ))
+
+        let expectedDeadline = now.addingTimeInterval(2700)
+        #expect(controller.session == .timed(deadline: expectedDeadline))
+        #expect(service.activationCount == 1)
+        #expect(service.deactivationCount == 0)
+        #expect(scheduler.scheduledDeadlines == [
+            now.addingTimeInterval(3600),
+            expectedDeadline,
+        ])
+        #expect(scheduler.cancellationCount == 1)
     }
 
     @Test("end time formatting is deterministic for an injected locale and time zone")

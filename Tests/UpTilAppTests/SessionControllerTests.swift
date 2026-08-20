@@ -138,6 +138,75 @@ struct SessionControllerTests {
         #expect(fixture.scheduler.scheduledDeadlines.isEmpty)
     }
 
+    @Test("shortenings reschedule without changing keep-awake activation")
+    func shorteningsRescheduleWithoutLifecycleChanges() {
+        let fixture = makeController()
+
+        #expect(fixture.controller.start(for: 120))
+        #expect(fixture.controller.shorten(by: 30))
+        #expect(fixture.controller.shorten(by: 15))
+
+        #expect(fixture.controller.session == .timed(deadline: startDate.addingTimeInterval(75)))
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.service.deactivationCount == 0)
+        #expect(fixture.scheduler.scheduledDeadlines == [
+            startDate.addingTimeInterval(120),
+            startDate.addingTimeInterval(90),
+            startDate.addingTimeInterval(75),
+        ])
+        #expect(fixture.scheduler.cancellationCount == 2)
+    }
+
+    @Test("equal and oversized shortenings leave scheduling unchanged")
+    func unavailableTimedShorteningsDoNothing() {
+        let fixture = makeController()
+
+        #expect(fixture.controller.start(for: 60))
+        #expect(!fixture.controller.shorten(by: 60))
+        #expect(!fixture.controller.shorten(by: 61))
+
+        #expect(fixture.controller.session == .timed(deadline: startDate.addingTimeInterval(60)))
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.service.deactivationCount == 0)
+        #expect(fixture.scheduler.scheduledDeadlines == [startDate.addingTimeInterval(60)])
+        #expect(fixture.scheduler.cancellationCount == 0)
+    }
+
+    @Test("shortening from idle or indefinite changes nothing")
+    func unavailableSessionShorteningsDoNothing() {
+        let fixture = makeController()
+
+        #expect(!fixture.controller.shorten(by: 10))
+        fixture.controller.startIndefinitely()
+        #expect(!fixture.controller.shorten(by: 10))
+
+        #expect(fixture.controller.session == .indefinite)
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.service.deactivationCount == 0)
+        #expect(fixture.scheduler.scheduledDeadlines.isEmpty)
+        #expect(fixture.scheduler.cancellationCount == 0)
+    }
+
+    @Test("shortening validates against the time at interaction")
+    func shorteningUsesCurrentClockValue() {
+        let fixture = makeController()
+
+        #expect(fixture.controller.start(for: 60))
+        fixture.clock.currentDate = startDate.addingTimeInterval(29)
+        #expect(fixture.controller.shorten(by: 30))
+        fixture.clock.currentDate = startDate.addingTimeInterval(30)
+        #expect(!fixture.controller.shorten(by: 1))
+
+        #expect(fixture.controller.session == .timed(deadline: startDate.addingTimeInterval(30)))
+        #expect(fixture.scheduler.scheduledDeadlines == [
+            startDate.addingTimeInterval(60),
+            startDate.addingTimeInterval(30),
+        ])
+        #expect(fixture.scheduler.cancellationCount == 1)
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.service.deactivationCount == 0)
+    }
+
     @Test("an exact deadline callback stops and deactivates once")
     func exactDeadlineExpiresSession() {
         let fixture = makeController()

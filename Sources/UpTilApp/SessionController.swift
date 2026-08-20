@@ -71,6 +71,16 @@ final class SessionController {
     }
 
     @discardableResult
+    func shorten(by duration: TimeInterval) -> Bool {
+        guard session.shorten(by: duration, at: now()) else {
+            return false
+        }
+
+        scheduleExpiry()
+        return true
+    }
+
+    @discardableResult
     func refresh(at date: Date) -> Bool {
         expireIfNeeded(at: date)
     }
