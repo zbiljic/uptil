@@ -112,11 +112,13 @@ struct MenuPresentationTests {
         let choice = QuickDurationChoice.fifteenMinutes
         let above = KeepAwakeSession.timed(deadline: now.addingTimeInterval(choice.duration + 0.001))
         let equal = KeepAwakeSession.timed(deadline: now.addingTimeInterval(choice.duration))
+        let below = KeepAwakeSession.timed(deadline: now.addingTimeInterval(choice.duration - 0.001))
 
         #expect(QuickDurationAction.start.isEnabled(for: choice, session: .idle, at: now))
         #expect(QuickDurationAction.extend.isEnabled(for: choice, session: above, at: now))
         #expect(QuickDurationAction.shorten.isEnabled(for: choice, session: above, at: now))
         #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: equal, at: now))
+        #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: below, at: now))
         #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: .idle, at: now))
         #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: .indefinite, at: now))
     }
