@@ -3,8 +3,10 @@ import Foundation
 @MainActor
 protocol KeepAwakeManaging: AnyObject {
     var isActive: Bool { get }
+    var isDisplaySleepPreventionActive: Bool { get }
 
     func activate()
+    func setDisplaySleepPreventionEnabled(_ enabled: Bool)
     func deactivate()
 }
 
@@ -15,7 +17,8 @@ final class ProcessInfoKeepAwakeService: KeepAwakeManaging {
 
     private let beginActivity: BeginActivity
     private let endActivity: EndActivity
-    private var activityToken: NSObjectProtocol?
+    private var systemActivityToken: NSObjectProtocol?
+    private var displayActivityToken: NSObjectProtocol?
 
     init(
         beginActivity: @escaping BeginActivity = { options, reason in
@@ -30,27 +33,55 @@ final class ProcessInfoKeepAwakeService: KeepAwakeManaging {
     }
 
     var isActive: Bool {
-        activityToken != nil
+        systemActivityToken != nil
+    }
+
+    var isDisplaySleepPreventionActive: Bool {
+        displayActivityToken != nil
     }
 
     func activate() {
-        guard activityToken == nil else {
+        guard systemActivityToken == nil else {
             return
         }
 
-        activityToken = beginActivity(
+        systemActivityToken = beginActivity(
             [.idleSystemSleepDisabled],
             "UpTil keep-awake session"
         )
     }
 
-    func deactivate() {
-        guard let activityToken else {
+    func setDisplaySleepPreventionEnabled(_ enabled: Bool) {
+        if enabled {
+            guard systemActivityToken != nil, displayActivityToken == nil else {
+                return
+            }
+
+            displayActivityToken = beginActivity(
+                [.idleDisplaySleepDisabled],
+                "UpTil display-awake option"
+            )
             return
         }
 
-        self.activityToken = nil
-        endActivity(activityToken)
+        guard let displayActivityToken else {
+            return
+        }
+
+        self.displayActivityToken = nil
+        endActivity(displayActivityToken)
+    }
+
+    func deactivate() {
+        if let displayActivityToken {
+            self.displayActivityToken = nil
+            endActivity(displayActivityToken)
+        }
+
+        if let systemActivityToken {
+            self.systemActivityToken = nil
+            endActivity(systemActivityToken)
+        }
     }
 
     deinit {

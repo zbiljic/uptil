@@ -7,6 +7,33 @@ import UpTilCore
 @MainActor
 @Suite("Menu presentation")
 struct MenuPresentationTests {
+    @Test("display-awake toggle presentation remains stable")
+    func displayAwakeTogglePresentationIsStable() {
+        #expect(DisplayAwakeTogglePresentation.label == "Keep display awake")
+        #expect(DisplayAwakeTogglePresentation.systemImage == "display")
+        #expect(DisplayAwakeTogglePresentation.description(isEnabled: true) ==
+            "Screen stays on during sessions")
+        #expect(DisplayAwakeTogglePresentation.description(isEnabled: false) ==
+            "Screen may sleep; Mac stays awake")
+    }
+
+    @Test("display-awake toggle routes through the controller")
+    func displayAwakeToggleRoutesThroughController() {
+        let service = FakeKeepAwakeService()
+        let preference = FakeDisplaySleepPreference()
+        let controller = SessionController(
+            keepAwakeService: service,
+            displaySleepPreference: preference
+        )
+
+        DisplayAwakeTogglePresentation.perform(isEnabled: true, controller: controller)
+
+        #expect(controller.keepsDisplayAwake)
+        #expect(preference.writes == [true])
+        #expect(!service.isActive)
+        #expect(!service.isDisplaySleepPreventionActive)
+    }
+
     @Test("idle menu bar icon uses a fixed-size template frame")
     func idleMenuBarIconUsesFixedSizeTemplateFrame() {
         let idle = MenuBarIconRenderer.image(for: .idle)
@@ -272,18 +299,24 @@ struct MenuPresentationTests {
     func quitActionCleansUpBeforeTermination() {
         let service = FakeKeepAwakeService()
         let scheduler = ManualExpiryScheduler()
+        let preference = FakeDisplaySleepPreference(isEnabled: true)
         let controller = SessionController(
             keepAwakeService: service,
+            displaySleepPreference: preference,
             expiryScheduler: scheduler
         )
         #expect(controller.start(for: 60))
+        #expect(service.isDisplaySleepPreventionActive)
 
-        var serviceWasStopped = false
+        var servicesWereStopped = false
         AppQuitAction.perform(controller: controller) {
-            serviceWasStopped = !service.isActive
+            servicesWereStopped = !service.isActive && !service.isDisplaySleepPreventionActive
         }
 
-        #expect(serviceWasStopped)
+        #expect(servicesWereStopped)
+        #expect(service.deactivationCount == 1)
+        #expect(service.displayDisableCount == 1)
         #expect(controller.session == .idle)
+        #expect(controller.keepsDisplayAwake)
     }
 }

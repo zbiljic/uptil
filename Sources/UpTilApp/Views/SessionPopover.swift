@@ -178,6 +178,23 @@ enum AppQuitAction {
     }
 }
 
+enum DisplayAwakeTogglePresentation {
+    static let label = "Keep display awake"
+    static let systemImage = "display"
+    static let enabledDescription = "Screen stays on during sessions"
+    static let disabledDescription = "Screen may sleep; Mac stays awake"
+    static let accessibilityHint = "Prevents automatic display dimming and sleep only during an active UpTil session"
+
+    static func description(isEnabled: Bool) -> String {
+        isEnabled ? enabledDescription : disabledDescription
+    }
+
+    @MainActor
+    static func perform(isEnabled: Bool, controller: SessionController) {
+        controller.setKeepsDisplayAwake(isEnabled)
+    }
+}
+
 struct SessionPopover: View {
     @Bindable var controller: SessionController
 
@@ -191,6 +208,8 @@ struct SessionPopover: View {
                 .font(.headline)
 
             statusContent
+
+            displayAwakeToggle
 
             ForEach(presentationState.quickDurationActions, id: \.self) { action in
                 quickDurationSection(action: action)
@@ -215,6 +234,33 @@ struct SessionPopover: View {
         }
         .padding(16)
         .frame(width: 300)
+    }
+
+    private var displayAwakeToggle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(
+                get: {
+                    controller.keepsDisplayAwake
+                },
+                set: { enabled in
+                    DisplayAwakeTogglePresentation.perform(
+                        isEnabled: enabled,
+                        controller: controller
+                    )
+                }
+            )) {
+                Label(DisplayAwakeTogglePresentation.label, systemImage: "display")
+            }
+            .toggleStyle(.switch)
+            .accessibilityLabel("Keep display awake")
+            .accessibilityHint(DisplayAwakeTogglePresentation.accessibilityHint)
+
+            Text(DisplayAwakeTogglePresentation.description(
+                isEnabled: controller.keepsDisplayAwake
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 
     private var statusContent: some View {

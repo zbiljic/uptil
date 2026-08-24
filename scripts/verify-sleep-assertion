@@ -4,7 +4,8 @@ set -eu
 
 script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project_root=$(dirname "$script_directory")
-reason="UpTil keep-awake session"
+system_reason="UpTil keep-awake session"
+display_reason="UpTil display-awake option"
 
 print_pid_report() {
     report=$1
@@ -26,18 +27,23 @@ print_pid_report() {
 matching_assertion_count() {
     report=$1
     target_pid=$2
+    assertion_type=$3
+    assertion_reason=$4
 
-    printf '%s\n' "$report" | awk -v target="$target_pid" -v reason="$reason" '
+    printf '%s\n' "$report" | awk \
+        -v target="$target_pid" \
+        -v assertion_type="$assertion_type" \
+        -v reason="$assertion_reason" '
         /^Listed by owning process:/ { listed = 1; next }
         /^Kernel Assertions:/ { listed = 0 }
         listed && $0 ~ "^[[:space:]]*pid " target "\\(" &&
-            index($0, "PreventUserIdleSystemSleep") &&
+            index($0, assertion_type) &&
             index($0, "UpTil") && index($0, reason) { count++ }
         END { print count + 0 }
     '
 }
 
-broader_assertion_count() {
+broad_system_assertion_count() {
     report=$1
     target_pid=$2
 
@@ -45,8 +51,7 @@ broader_assertion_count() {
         /^Listed by owning process:/ { listed = 1; next }
         /^Kernel Assertions:/ { listed = 0 }
         listed && $0 ~ "^[[:space:]]*pid " target "\\(" &&
-            (index($0, "PreventUserIdleDisplaySleep") ||
-             index($0, "PreventSystemSleep")) { count++ }
+            index($0, "PreventSystemSleep") { count++ }
         END { print count + 0 }
     '
 }
@@ -54,8 +59,9 @@ broader_assertion_count() {
 named_assertion_count() {
     report=$1
     target_pid=$2
+    assertion_reason=$3
 
-    printf '%s\n' "$report" | awk -v target="$target_pid" -v reason="$reason" '
+    printf '%s\n' "$report" | awk -v target="$target_pid" -v reason="$assertion_reason" '
         /^Listed by owning process:/ { listed = 1; next }
         /^Kernel Assertions:/ { listed = 0 }
         listed && $0 ~ "^[[:space:]]*pid " target "\\(" &&
@@ -99,32 +105,64 @@ pid=$pids
 printf 'Using UpTil pid %s.\n' "$pid"
 
 before_report=$(pmset -g assertions)
-if test "$(named_assertion_count "$before_report" "$pid")" -ne 0; then
-    echo "Expected no UpTil keep-awake assertion before starting a session." >&2
+before_system_count=$(named_assertion_count "$before_report" "$pid" "$system_reason")
+before_display_count=$(named_assertion_count "$before_report" "$pid" "$display_reason")
+if test "$before_system_count" -ne 0 || test "$before_display_count" -ne 0; then
+    echo "Expected no named UpTil assertion before starting a session." >&2
     print_pid_report "$before_report" "$pid"
     exit 1
 fi
 
-printf '%s\n' "In the UpTil menu, select 15m, then return here."
-printf 'Press Return after the 15m session is active: '
+printf '%s\n' "In the UpTil menu, turn Keep display awake off and select 15m."
+printf 'Press Return after the default-off 15m session is active: '
 IFS= read -r ignored
 
 active_report=$(pmset -g assertions)
-matching_count=$(matching_assertion_count "$active_report" "$pid")
-broader_count=$(broader_assertion_count "$active_report" "$pid")
-if test "$matching_count" -ne 1; then
+system_count=$(matching_assertion_count \
+    "$active_report" "$pid" "PreventUserIdleSystemSleep" "$system_reason")
+display_count=$(matching_assertion_count \
+    "$active_report" "$pid" "PreventUserIdleDisplaySleep" "$display_reason")
+broad_count=$(broad_system_assertion_count "$active_report" "$pid")
+if test "$system_count" -ne 1; then
     printf 'Expected exactly one idle-system-sleep assertion for pid %s; found %s.\n' \
-        "$pid" "$matching_count" >&2
+        "$pid" "$system_count" >&2
     print_pid_report "$active_report" "$pid"
     exit 1
 fi
-if test "$broader_count" -ne 0; then
-    echo "UpTil unexpectedly owns a display-sleep or broad system-sleep assertion." >&2
+if test "$display_count" -ne 0; then
+    echo "UpTil unexpectedly owns its display assertion with the option off." >&2
+    print_pid_report "$active_report" "$pid"
+    exit 1
+fi
+if test "$broad_count" -ne 0; then
+    echo "UpTil unexpectedly owns a broad system-sleep assertion." >&2
     print_pid_report "$active_report" "$pid"
     exit 1
 fi
 
-printf '%s\n' "In the UpTil menu, select Stop, then return here."
+printf '%s\n' "Turn Keep display awake on without replacing the active session."
+printf 'Press Return after the display option is on: '
+IFS= read -r ignored
+
+opted_in_report=$(pmset -g assertions)
+system_count=$(matching_assertion_count \
+    "$opted_in_report" "$pid" "PreventUserIdleSystemSleep" "$system_reason")
+display_count=$(matching_assertion_count \
+    "$opted_in_report" "$pid" "PreventUserIdleDisplaySleep" "$display_reason")
+broad_count=$(broad_system_assertion_count "$opted_in_report" "$pid")
+if test "$system_count" -ne 1 || test "$display_count" -ne 1; then
+    printf 'Expected one base and one display assertion for pid %s; found %s and %s.\n' \
+        "$pid" "$system_count" "$display_count" >&2
+    print_pid_report "$opted_in_report" "$pid"
+    exit 1
+fi
+if test "$broad_count" -ne 0; then
+    echo "UpTil unexpectedly owns a broad system-sleep assertion." >&2
+    print_pid_report "$opted_in_report" "$pid"
+    exit 1
+fi
+
+printf '%s\n' "In the UpTil menu, select Stop while Keep display awake remains on."
 printf 'Press Return after the session has stopped: '
 IFS= read -r ignored
 
@@ -137,10 +175,12 @@ if test "$current_pid_count" -ne 1 || test "$current_pids" != "$pid"; then
 fi
 
 stopped_report=$(pmset -g assertions)
-if test "$(named_assertion_count "$stopped_report" "$pid")" -ne 0; then
-    echo "Expected the UpTil keep-awake assertion to be absent after Stop." >&2
+stopped_system_count=$(named_assertion_count "$stopped_report" "$pid" "$system_reason")
+stopped_display_count=$(named_assertion_count "$stopped_report" "$pid" "$display_reason")
+if test "$stopped_system_count" -ne 0 || test "$stopped_display_count" -ne 0; then
+    echo "Expected both named UpTil assertions to be absent after Stop." >&2
     print_pid_report "$stopped_report" "$pid"
     exit 1
 fi
 
-echo "PASS: idle system sleep is prevented only while active; display sleep is not prevented."
+echo "PASS: default-off allows display sleep, opt-in prevents display sleep, and Stop cleans up both assertions."

@@ -5,7 +5,10 @@ import Foundation
 final class FakeKeepAwakeService: KeepAwakeManaging {
     private(set) var activationCount = 0
     private(set) var deactivationCount = 0
+    private(set) var displayEnableCount = 0
+    private(set) var displayDisableCount = 0
     private(set) var isActive = false
+    private(set) var isDisplaySleepPreventionActive = false
 
     func activate() {
         guard !isActive else {
@@ -16,13 +19,50 @@ final class FakeKeepAwakeService: KeepAwakeManaging {
         activationCount += 1
     }
 
+    func setDisplaySleepPreventionEnabled(_ enabled: Bool) {
+        if enabled {
+            guard isActive, !isDisplaySleepPreventionActive else {
+                return
+            }
+
+            isDisplaySleepPreventionActive = true
+            displayEnableCount += 1
+            return
+        }
+
+        guard isDisplaySleepPreventionActive else {
+            return
+        }
+
+        isDisplaySleepPreventionActive = false
+        displayDisableCount += 1
+    }
+
     func deactivate() {
         guard isActive else {
             return
         }
 
+        if isDisplaySleepPreventionActive {
+            isDisplaySleepPreventionActive = false
+            displayDisableCount += 1
+        }
         isActive = false
         deactivationCount += 1
+    }
+}
+
+@MainActor
+final class FakeDisplaySleepPreference: DisplaySleepPreferenceManaging {
+    private(set) var writes: [Bool] = []
+    var isEnabled: Bool {
+        didSet {
+            writes.append(isEnabled)
+        }
+    }
+
+    init(isEnabled: Bool = false) {
+        self.isEnabled = isEnabled
     }
 }
 

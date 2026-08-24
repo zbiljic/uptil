@@ -6,8 +6,10 @@ import UpTilCore
 @Observable
 final class SessionController {
     private(set) var session: KeepAwakeSession = .idle
+    private(set) var keepsDisplayAwake: Bool
 
     private let keepAwakeService: any KeepAwakeManaging
+    private let displaySleepPreference: any DisplaySleepPreferenceManaging
     private let expiryScheduler: any ExpiryScheduling
     private let now: @MainActor () -> Date
     private var expiryCancellation: (any ExpiryCancellation)?
@@ -18,12 +20,28 @@ final class SessionController {
 
     init(
         keepAwakeService: any KeepAwakeManaging = ProcessInfoKeepAwakeService(),
+        displaySleepPreference: any DisplaySleepPreferenceManaging = UserDefaultsDisplaySleepPreference(),
         expiryScheduler: any ExpiryScheduling = TaskExpiryScheduler(),
         now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.keepAwakeService = keepAwakeService
+        self.displaySleepPreference = displaySleepPreference
+        keepsDisplayAwake = displaySleepPreference.isEnabled
         self.expiryScheduler = expiryScheduler
         self.now = now
+    }
+
+    func setKeepsDisplayAwake(_ enabled: Bool) {
+        guard keepsDisplayAwake != enabled else {
+            return
+        }
+
+        keepsDisplayAwake = enabled
+        displaySleepPreference.isEnabled = enabled
+
+        if session.isActive {
+            keepAwakeService.setDisplaySleepPreventionEnabled(enabled)
+        }
     }
 
     @discardableResult
@@ -34,7 +52,7 @@ final class SessionController {
         }
 
         if wasIdle {
-            keepAwakeService.activate()
+            activateAssertions()
         }
         scheduleExpiry()
         return true
@@ -48,7 +66,7 @@ final class SessionController {
         }
 
         if wasIdle {
-            keepAwakeService.activate()
+            activateAssertions()
         }
         scheduleExpiry()
         return true
@@ -60,7 +78,14 @@ final class SessionController {
         cancelScheduledExpiry()
 
         if wasIdle {
-            keepAwakeService.activate()
+            activateAssertions()
+        }
+    }
+
+    private func activateAssertions() {
+        keepAwakeService.activate()
+        if keepsDisplayAwake {
+            keepAwakeService.setDisplaySleepPreventionEnabled(true)
         }
     }
 

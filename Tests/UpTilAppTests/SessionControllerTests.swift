@@ -16,6 +16,7 @@ struct SessionControllerTests {
         #expect(fixture.service.activationCount == 1)
         #expect(fixture.service.deactivationCount == 0)
         #expect(fixture.controller.assertionIsActive)
+        #expect(!fixture.service.isDisplaySleepPreventionActive)
         #expect(fixture.controller.session == .timed(deadline: startDate.addingTimeInterval(60)))
         #expect(fixture.scheduler.scheduledDeadlines == [startDate.addingTimeInterval(60)])
     }
@@ -328,28 +329,35 @@ struct SessionControllerTests {
         #expect(fixture.scheduler.scheduledDeadlines == [startDate.addingTimeInterval(10)])
     }
 
-    private func makeController() -> SessionControllerFixture {
-        SessionControllerFixture(startDate: startDate)
+    private func makeController(keepsDisplayAwake: Bool = false) -> SessionControllerFixture {
+        SessionControllerFixture(
+            startDate: startDate,
+            keepsDisplayAwake: keepsDisplayAwake
+        )
     }
 }
 
 @MainActor
-private final class SessionControllerFixture {
+final class SessionControllerFixture {
     let controller: SessionController
     let service: FakeKeepAwakeService
     let scheduler: ManualExpiryScheduler
     let clock: TestClock
+    let preference: FakeDisplaySleepPreference
 
-    init(startDate: Date) {
+    init(startDate: Date, keepsDisplayAwake: Bool) {
         let service = FakeKeepAwakeService()
         let scheduler = ManualExpiryScheduler()
         let clock = TestClock(startDate)
+        let preference = FakeDisplaySleepPreference(isEnabled: keepsDisplayAwake)
 
         self.service = service
         self.scheduler = scheduler
         self.clock = clock
+        self.preference = preference
         controller = SessionController(
             keepAwakeService: service,
+            displaySleepPreference: preference,
             expiryScheduler: scheduler
         ) {
             clock.currentDate
