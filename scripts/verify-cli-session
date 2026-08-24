@@ -1,0 +1,376 @@
+#!/bin/sh
+
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_root=$(dirname "$script_directory")
+verification_directory="$script_directory/verification"
+app_path="$project_root/Derived/Build/Products/Debug/UpTil.app"
+helper="$script_directory/uptil"
+built_helper="$app_path/Contents/Helpers/uptil"
+socket_path="$HOME/Library/Containers/com.zbiljic.uptil/Data/tmp/uptil.sock"
+temporary_directory=$(mktemp -d)
+
+pid=
+socket_identity=
+fixture_pid=
+fixture_identity=
+normal_termination=0
+
+phase() {
+    printf '\n==> %s\n' "$1"
+}
+
+matching_assertion_count() {
+    pmset -g assertions | awk -v target="$1" '
+        /^Listed by owning process:/ { listed = 1; next }
+        /^Kernel Assertions:/ { listed = 0 }
+        listed && $0 ~ "^[[:space:]]*pid " target "\\(" &&
+          index($0, "PreventUserIdleSystemSleep") && index($0, "UpTil keep-awake session") { count++ }
+        END { print count + 0 }
+    '
+}
+
+assert_status() {
+    python3 "$verification_directory/status_contract.py" \
+        status "$1" "$2" "$3"
+}
+
+assert_deadline_delta() {
+    python3 "$verification_directory/status_contract.py" \
+        deadline-delta "$1" "$2" "$3" "$4"
+}
+
+current_socket_identity() {
+    stat -f '%d:%i:%u:%Lp:socket' "$socket_path"
+}
+
+unlink_socket_if_unchanged() {
+    expected_identity=$1
+    test -n "$expected_identity" && test -S "$socket_path" || return 0
+
+    current_identity=$(current_socket_identity 2>/dev/null || true)
+    if test "$current_identity" = "$expected_identity"; then
+        unlink "$socket_path"
+    else
+        echo "Refusing to unlink a socket node whose identity changed." >&2
+    fi
+}
+
+assert_no_mcp_bridge() {
+    context=$1
+    if pgrep -f -x "$built_helper mcp" >/dev/null 2>&1; then
+        echo "$context left an MCP bridge process running." >&2
+        exit 1
+    fi
+}
+
+cleanup() {
+    if test -n "$pid" && test "$normal_termination" -ne 1 && kill -0 "$pid" 2>/dev/null; then
+        echo "FAIL: normal termination did not complete; using exact-PID emergency SIGTERM cleanup." >&2
+        kill "$pid" 2>/dev/null || true
+        attempt=0
+        while test "$attempt" -lt 10 && kill -0 "$pid" 2>/dev/null; do
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+    fi
+
+    if test -n "$fixture_pid" && kill -0 "$fixture_pid" 2>/dev/null; then
+        kill "$fixture_pid" 2>/dev/null || true
+        wait "$fixture_pid" 2>/dev/null || true
+    fi
+
+    if test -n "$fixture_identity"; then
+        unlink_socket_if_unchanged "$fixture_identity"
+    elif test -n "$socket_identity" && test -n "$pid" && ! kill -0 "$pid" 2>/dev/null; then
+        unlink_socket_if_unchanged "$socket_identity"
+    fi
+
+    rm -rf "$temporary_directory"
+}
+trap cleanup EXIT HUP INT TERM
+
+verify_app_is_not_running() {
+    if pgrep -x UpTil >/dev/null 2>&1; then
+        echo "Refusing to alter an already-running UpTil process." >&2
+        exit 1
+    fi
+}
+
+build_app() {
+    (cd "$project_root" && mise run app:build)
+}
+
+verify_unavailable_contract() {
+    set +e
+    unavailable=$(
+        "$helper" status --json 2>"$temporary_directory/unavailable.err"
+    )
+    unavailable_exit=$?
+    set -e
+
+    test "$unavailable_exit" -eq 3
+    test "$unavailable" = '{"schemaVersion":1,"state":"unavailable"}'
+    test ! -s "$temporary_directory/unavailable.err"
+
+    unavailable_request='{"jsonrpc":"2.0","id":"unavailable-1","method":"tools/call","params":{"name":"uptil.status","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+    printf '%s\n' "$unavailable_request" |
+        "$built_helper" mcp \
+            >"$temporary_directory/unavailable-mcp.out" \
+            2>"$temporary_directory/unavailable-mcp.err"
+    test "$(plutil -extract id raw - <"$temporary_directory/unavailable-mcp.out")" = unavailable-1
+    test "$(plutil -extract error.code raw - <"$temporary_directory/unavailable-mcp.out")" = -32603
+}
+
+launch_app() {
+    open "$app_path"
+
+    attempt=0
+    while test "$attempt" -lt 20; do
+        pid=$(pgrep -x UpTil 2>/dev/null || true)
+        test -n "$pid" && break
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    test -n "$pid" || {
+        echo "UpTil did not launch." >&2
+        exit 1
+    }
+
+    case "$pid" in
+        *[!0-9]*)
+            echo "Expected exactly one verifier-launched UpTil PID, got: $pid" >&2
+            exit 1
+            ;;
+    esac
+
+    process_command=$(ps -p "$pid" -o command=)
+    case "$process_command" in
+        "$app_path/Contents/MacOS/UpTil" | "$app_path/Contents/MacOS/UpTil "*) ;;
+        *)
+            echo "Verifier PID does not belong to the Debug app: $process_command" >&2
+            exit 1
+            ;;
+    esac
+
+    attempt=0
+    while test "$attempt" -lt 20; do
+        current_state=$(
+            "$helper" status --json |
+                plutil -extract state raw - 2>/dev/null || true
+        )
+        test "$current_state" = idle && break
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    test "$attempt" -lt 20 || {
+        echo "Control socket did not become available." >&2
+        exit 1
+    }
+}
+
+verify_socket_security() {
+    test -S "$socket_path"
+    test "$(stat -f '%u %Lp' "$socket_path")" = "$(id -u) 600"
+    socket_identity=$(current_socket_identity)
+
+    lsof -nP -U -a -p "$pid" | awk -v target="$pid" '
+        NR > 1 && $2 == target && $5 == "unix" { found = 1 }
+        END { exit !found }
+    '
+    netstat -anv -f unix | awk -v process="UpTil:$pid" -v path="$socket_path" '
+        $NF == path {
+            for (field = 1; field <= NF; field++) {
+                if ($field == process) {
+                    count++
+                    break
+                }
+            }
+        }
+        END { exit count != 1 }
+    '
+
+    if lsof -nP -a -p "$pid" -iTCP -iUDP | grep -v '^COMMAND' | grep . >/dev/null; then
+        echo "UpTil unexpectedly owns a TCP or UDP listener." >&2
+        exit 1
+    fi
+    test "$(matching_assertion_count "$pid")" -eq 0
+}
+
+verify_official_mcp_client() {
+    "$script_directory/verify-mcp-interoperability" "$helper" "$pid"
+    assert_no_mcp_bridge "The interoperability verifier"
+}
+
+verify_rejected_cli_transition() {
+    assert_status "$("$helper" status --json)" idle "$pid"
+
+    set +e
+    "$helper" extend 30s \
+        >"$temporary_directory/rejected.out" \
+        2>"$temporary_directory/rejected.err"
+    rejected_exit=$?
+    set -e
+
+    test "$rejected_exit" -eq 2
+    test ! -s "$temporary_directory/rejected.out"
+    test -s "$temporary_directory/rejected.err"
+    assert_status "$("$helper" status --json)" idle "$pid"
+}
+
+verify_mcp_stdio_contract() {
+    python3 "$verification_directory/mcp_stdio_contract.py" "$built_helper"
+    assert_status "$("$helper" status --json)" idle "$pid"
+    test "$(matching_assertion_count "$pid")" -eq 0
+    assert_no_mcp_bridge "The stdio behavior checks"
+}
+
+verify_session_transitions() {
+    start_output=$("$helper" start 120s)
+    case "$start_output" in
+        'Started a timed session until '*'.') ;;
+        *) exit 1 ;;
+    esac
+
+    started=$("$helper" status --json)
+    assert_status "$started" timed "$pid"
+    started_deadline=$(printf '%s' "$started" | plutil -extract until raw -)
+    test "$(matching_assertion_count "$pid")" -eq 1
+
+    "$helper" extend 60s >/dev/null
+    extended=$("$helper" status --json)
+    assert_status "$extended" timed "$pid"
+    extended_deadline=$(printf '%s' "$extended" | plutil -extract until raw -)
+    assert_deadline_delta "$started_deadline" "$extended_deadline" 59 61
+
+    "$helper" shorten 60s >/dev/null
+    shortened=$("$helper" status --json)
+    assert_status "$shortened" timed "$pid"
+    shortened_deadline=$(printf '%s' "$shortened" | plutil -extract until raw -)
+    assert_deadline_delta "$started_deadline" "$shortened_deadline" -1 1
+
+    "$helper" indefinite >/dev/null
+    assert_status "$("$helper" status --json)" indefinite "$pid"
+
+    "$helper" stop >/dev/null
+    assert_status "$("$helper" status --json)" idle "$pid"
+    test "$(matching_assertion_count "$pid")" -eq 0
+    test "$(pgrep -x UpTil 2>/dev/null || true)" = "$pid"
+}
+
+terminate_app_normally() {
+    swift "$verification_directory/terminate_app.swift" "$pid"
+
+    attempt=0
+    while test "$attempt" -lt 20; do
+        if ! kill -0 "$pid" 2>/dev/null &&
+            ! test -e "$socket_path" &&
+            ! test -L "$socket_path" &&
+            test "$(matching_assertion_count "$pid")" -eq 0
+        then
+            normal_termination=1
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    test "$normal_termination" -eq 1 || {
+        echo "Normal termination left a PID, socket, or assertion." >&2
+        exit 1
+    }
+}
+
+verify_indeterminate_mutation() {
+    fixture_receipt="$temporary_directory/no-response-request.json"
+    python3 "$verification_directory/no_response_server.py" \
+        "$socket_path" "$fixture_receipt" &
+    fixture_pid=$!
+
+    attempt=0
+    while test "$attempt" -lt 20 && ! test -S "$socket_path"; do
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+    test -S "$socket_path"
+    fixture_identity=$(current_socket_identity)
+
+    set +e
+    "$helper" start 30s \
+        >"$temporary_directory/indeterminate.out" \
+        2>"$temporary_directory/indeterminate.err"
+    indeterminate_exit=$?
+    set -e
+
+    attempt=0
+    while test "$attempt" -lt 10 &&
+        ! test -s "$fixture_receipt" &&
+        kill -0 "$fixture_pid" 2>/dev/null
+    do
+        attempt=$((attempt + 1))
+        sleep 1
+    done
+
+    test -s "$fixture_receipt" || {
+        echo "No-response fixture did not receive a complete request." >&2
+        exit 1
+    }
+
+    fixture_exit=0
+    wait "$fixture_pid" || fixture_exit=$?
+    fixture_pid=
+    test "$fixture_exit" -eq 0
+
+    test "$(plutil -extract method raw - <"$fixture_receipt")" = tools/call
+    test "$(plutil -extract params.name raw - <"$fixture_receipt")" = uptil.start
+    test "$indeterminate_exit" -eq 4
+    test ! -s "$temporary_directory/indeterminate.out"
+    test -s "$temporary_directory/indeterminate.err"
+    test "$(current_socket_identity)" = "$fixture_identity"
+
+    unlink_socket_if_unchanged "$fixture_identity"
+    fixture_identity=
+    test ! -e "$socket_path"
+}
+
+finish() {
+    rm -rf "$temporary_directory"
+    test ! -e "$temporary_directory"
+    assert_no_mcp_bridge "Normal cleanup"
+    echo "PASS: CLI and MCP transitions, assertion lifecycle, and normal socket cleanup verified."
+}
+
+phase "Build the debug app"
+verify_app_is_not_running
+build_app
+
+phase "Verify behavior while the app is unavailable"
+verify_unavailable_contract
+
+phase "Launch and identify the app"
+launch_app
+
+phase "Verify local socket security"
+verify_socket_security
+
+phase "Verify official MCP client interoperability"
+verify_official_mcp_client
+
+phase "Verify rejected CLI transitions"
+verify_rejected_cli_transition
+
+phase "Verify MCP stdio behavior"
+verify_mcp_stdio_contract
+
+phase "Verify session transitions and assertions"
+verify_session_transitions
+
+phase "Verify normal app termination"
+terminate_app_normally
+
+phase "Verify indeterminate mutation handling"
+verify_indeterminate_mutation
+
+phase "Verify final cleanup"
+finish

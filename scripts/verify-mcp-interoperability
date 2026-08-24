@@ -1,0 +1,54 @@
+#!/bin/sh
+
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+verification_directory="$script_directory/verification"
+helper=${1:-"$script_directory/uptil"}
+expected_pid=${2:-}
+temporary_directory=$(mktemp -d)
+
+cleanup() {
+    rm -rf "$temporary_directory"
+}
+trap cleanup EXIT HUP INT TERM
+
+require_running_app() {
+    if ! pgrep -x UpTil >/dev/null 2>&1; then
+        echo "UpTil must already be running." >&2
+        exit 1
+    fi
+    if ! test -x "$helper"; then
+        echo "MCP helper is not executable: $helper" >&2
+        exit 1
+    fi
+}
+
+install_official_client() {
+    attempt=1
+    while ! (
+        cd "$temporary_directory"
+        npm install \
+            --ignore-scripts \
+            --no-save \
+            --package-lock=false \
+            @modelcontextprotocol/client@2.0.0
+    ); do
+        if test "$attempt" -ge 3; then
+            echo "Unable to install the pinned MCP client after three attempts." >&2
+            exit 1
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+}
+
+run_interoperability_check() {
+    cp "$verification_directory/mcp_interoperability.mjs" \
+        "$temporary_directory/verify.mjs"
+    node "$temporary_directory/verify.mjs" "$helper" "$expected_pid"
+}
+
+require_running_app
+install_official_client
+run_interoperability_check
