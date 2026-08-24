@@ -12,6 +12,10 @@ final class SessionController {
     private let now: @MainActor () -> Date
     private var expiryCancellation: (any ExpiryCancellation)?
 
+    var assertionIsActive: Bool {
+        keepAwakeService.isActive
+    }
+
     init(
         keepAwakeService: any KeepAwakeManaging = ProcessInfoKeepAwakeService(),
         expiryScheduler: any ExpiryScheduling = TaskExpiryScheduler(),

@@ -15,6 +15,7 @@ struct SessionControllerTests {
         #expect(fixture.controller.start(for: 60))
         #expect(fixture.service.activationCount == 1)
         #expect(fixture.service.deactivationCount == 0)
+        #expect(fixture.controller.assertionIsActive)
         #expect(fixture.controller.session == .timed(deadline: startDate.addingTimeInterval(60)))
         #expect(fixture.scheduler.scheduledDeadlines == [startDate.addingTimeInterval(60)])
     }
