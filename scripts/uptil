@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -eu
+
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_root=$(dirname "$script_directory")
+helper="$project_root/Derived/Build/Products/Debug/UpTil.app/Contents/Helpers/uptil"
+
+if ! test -x "$helper"; then
+    (cd "$project_root" && mise run app:build)
+fi
+
+if ! test -x "$helper"; then
+    echo "Bundled UpTil helper was not built." >&2
+    exit 1
+fi
+
+exec "$helper" "$@"
