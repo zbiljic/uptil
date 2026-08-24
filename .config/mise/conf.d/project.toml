@@ -1,0 +1,33 @@
+[tasks."core:build"]
+description = "Build the portable UpTilCore package"
+run = "swift build --package-path Packages/UpTilCore"
+
+[tasks."core:test"]
+description = "Test the portable UpTilCore package"
+run = "swift test --package-path Packages/UpTilCore"
+
+[tasks."core:clean"]
+description = "Remove Swift package build artifacts"
+run = "swift package --package-path Packages/UpTilCore clean"
+
+[tasks."app:generate"]
+description = "Generate the UpTil Xcode project without opening Xcode"
+run = "tuist generate run --no-open"
+
+[tasks."app:build"]
+description = "Build the UpTil application"
+depends = ["app:generate"]
+run = "tuist xcodebuild build -scheme UpTil -configuration Debug -derivedDataPath Derived"
+
+[tasks."app:test"]
+description = "Test the UpTil application"
+depends = ["app:generate"]
+run = "tuist xcodebuild test -scheme UpTil -configuration Debug -derivedDataPath Derived"
+
+[tasks."app:test-live"]
+description = "Test the launched app, CLI, MCP bridge, and sleep assertion lifecycle"
+run = "./scripts/verify-cli-session"
+
+[tasks."app:clean"]
+description = "Remove generated Xcode and app build artifacts"
+run = "rm -rf Derived UpTil.xcodeproj UpTil.xcworkspace"
