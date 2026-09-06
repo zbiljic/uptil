@@ -138,6 +138,10 @@ final class SessionController {
         stop()
     }
 
+    func reconcileClockChange() {
+        handleScheduledExpiry()
+    }
+
     private func scheduleExpiry() {
         cancelScheduledExpiry()
 

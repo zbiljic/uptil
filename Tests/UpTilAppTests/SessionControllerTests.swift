@@ -252,6 +252,47 @@ struct SessionControllerTests {
         #expect(fixture.scheduler.cancellationCount == 1)
     }
 
+    @Test("clock changes reconcile overdue and future sessions")
+    func clockChangesReconcileSessions() {
+        let deadline = startDate.addingTimeInterval(60)
+        let overdue = makeController(keepsDisplayAwake: true)
+        #expect(overdue.controller.start(for: 60))
+        overdue.clock.currentDate = deadline.addingTimeInterval(1)
+        overdue.controller.reconcileClockChange()
+        #expect(overdue.controller.session == .idle)
+        #expect(!overdue.controller.assertionIsActive)
+        #expect(!overdue.service.isDisplaySleepPreventionActive)
+        #expect(overdue.service.deactivationCount == 1 && overdue.scheduler.cancellationCount == 1)
+        #expect(overdue.preference.isEnabled)
+
+        overdue.controller.reconcileClockChange()
+        #expect(overdue.service.deactivationCount == 1)
+        #expect(overdue.scheduler.cancellationCount == 1)
+
+        let future = makeController()
+        #expect(future.controller.start(for: 60))
+        future.clock.currentDate = startDate.addingTimeInterval(30)
+        future.controller.reconcileClockChange()
+        future.clock.currentDate = startDate.addingTimeInterval(-30)
+        future.controller.reconcileClockChange()
+        #expect(future.controller.session == .timed(deadline: deadline))
+        #expect(future.scheduler.scheduledDeadlines == [deadline, deadline, deadline])
+        #expect(future.scheduler.cancellationCount == 2)
+        #expect(future.service.activationCount == 1)
+        #expect(future.service.deactivationCount == 0)
+
+        let idle = makeController()
+        idle.controller.reconcileClockChange()
+        #expect(idle.scheduler.scheduledDeadlines.isEmpty && idle.service.activationCount == 0)
+
+        let indefinite = makeController()
+        indefinite.controller.startIndefinitely()
+        indefinite.controller.reconcileClockChange()
+        #expect(indefinite.scheduler.scheduledDeadlines.isEmpty)
+        #expect(indefinite.service.activationCount == 1)
+        #expect(indefinite.service.deactivationCount == 0)
+    }
+
     @Test("explicit stop cancels expiry and deactivates once")
     func stopCancelsAndDeactivates() {
         let fixture = makeController()
