@@ -11,10 +11,7 @@ struct MenuPresentationTests {
     func displayAwakeTogglePresentationIsStable() {
         #expect(DisplayAwakeTogglePresentation.label == "Keep display awake")
         #expect(DisplayAwakeTogglePresentation.systemImage == "display")
-        #expect(DisplayAwakeTogglePresentation.description(isEnabled: true) ==
-            "Screen stays on during sessions")
-        #expect(DisplayAwakeTogglePresentation.description(isEnabled: false) ==
-            "Screen may sleep; Mac stays awake")
+        #expect(DisplayAwakeTogglePresentation.description == "During sessions only")
     }
 
     @Test("display-awake toggle routes through the controller")
@@ -60,7 +57,7 @@ struct MenuPresentationTests {
     func idlePresentationUsesFixedQuickChoices() {
         let presentation = SessionPresentationState(session: .idle)
 
-        #expect(presentation.quickDurationActions == [.start])
+        #expect(presentation.quickDurationActions == [.start, .shorten])
         #expect(presentation.quickDurationChoices == QuickDurationChoice.allCases)
         #expect(presentation.quickDurationChoices.map(\.duration) == [900, 1800, 3600, 7200])
         #expect(presentation.canStartUntil)
@@ -87,12 +84,17 @@ struct MenuPresentationTests {
         #expect(!timed.quickDurationChoices.map(\.duration).contains(300))
     }
 
-    @Test("indefinite presentation has no duration actions")
-    func indefinitePresentationHidesQuickDurations() {
+    @Test("indefinite presentation keeps disabled duration actions visible")
+    func indefinitePresentationKeepsQuickDurations() {
         let presentation = SessionPresentationState(session: .indefinite)
 
-        #expect(presentation.quickDurationActions.isEmpty)
-        #expect(presentation.quickDurationChoices.isEmpty)
+        #expect(presentation.quickDurationActions == [.extend, .shorten])
+        #expect(presentation.quickDurationChoices == QuickDurationChoice.allCases)
+        for action in presentation.quickDurationActions {
+            for choice in presentation.quickDurationChoices {
+                #expect(!action.isEnabled(for: choice, session: .indefinite, at: Date()))
+            }
+        }
         #expect(!presentation.canStartUntil)
         #expect(presentation.canStop)
     }
@@ -101,10 +103,11 @@ struct MenuPresentationTests {
     func quickDurationTitlesReflectAction() {
         let choices = QuickDurationChoice.allCases
 
-        #expect(choices.map { QuickDurationAction.start.title(for: $0) } == ["15m", "30m", "1h", "2h"])
-        #expect(choices.map { QuickDurationAction.extend.title(for: $0) } == ["+15m", "+30m", "+1h", "+2h"])
-        #expect(choices.map { QuickDurationAction.shorten.title(for: $0) } == ["-15m", "-30m", "-1h", "-2h"])
-        #expect(QuickDurationAction.start.sectionTitle == "Start for")
+        #expect(choices.map(\.title) == ["15m", "30m", "1h", "2h"])
+        #expect(QuickDurationAction.start.sign == "+")
+        #expect(QuickDurationAction.extend.sign == "+")
+        #expect(QuickDurationAction.shorten.sign == "−")
+        #expect(QuickDurationAction.start.sectionTitle == "Add time")
         #expect(QuickDurationAction.extend.sectionTitle == "Add time")
         #expect(QuickDurationAction.shorten.sectionTitle == "Remove time")
     }
@@ -142,6 +145,10 @@ struct MenuPresentationTests {
         let below = KeepAwakeSession.timed(deadline: now.addingTimeInterval(choice.duration - 0.001))
 
         #expect(QuickDurationAction.start.isEnabled(for: choice, session: .idle, at: now))
+        #expect(!QuickDurationAction.start.isEnabled(for: choice, session: above, at: now))
+        #expect(!QuickDurationAction.start.isEnabled(for: choice, session: .indefinite, at: now))
+        #expect(!QuickDurationAction.extend.isEnabled(for: choice, session: .idle, at: now))
+        #expect(!QuickDurationAction.extend.isEnabled(for: choice, session: .indefinite, at: now))
         #expect(QuickDurationAction.extend.isEnabled(for: choice, session: above, at: now))
         #expect(QuickDurationAction.shorten.isEnabled(for: choice, session: above, at: now))
         #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: equal, at: now))
@@ -216,9 +223,10 @@ struct MenuPresentationTests {
         #expect(
             EndTimeFormatting.string(
                 for: Date(timeIntervalSince1970: 0),
+                now: Date(timeIntervalSince1970: 0),
                 locale: Locale(identifier: "en_GB"),
                 timeZone: timeZone
-            ) == "UpTil 00:00"
+            ) == "today at 00:00"
         )
     }
 
@@ -294,6 +302,77 @@ struct MenuPresentationTests {
         #expect(preview.contains("6:30"))
         #expect(preview.contains("PM"))
     }
+}
+
+extension MenuPresentationTests {
+    @Test("Until action submits the displayed absolute deadline")
+    func untilActionSubmitsDisplayedDeadline() throws {
+        let timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let beforeNoon = try #require(calendar.date(from: DateComponents(
+            year: 2026,
+            month: 8,
+            day: 19,
+            hour: 11,
+            minute: 59,
+            second: 59
+        )))
+        let afterNoon = beforeNoon.addingTimeInterval(2)
+        let selection = try #require(calendar.date(from: DateComponents(hour: 12)))
+        let displayedDeadline = try #require(WallClockDeadline.nextOccurrence(
+            of: selection,
+            after: beforeNoon,
+            calendar: calendar
+        ))
+        let fixture = SessionControllerFixture(startDate: beforeNoon, keepsDisplayAwake: false)
+        let control = UntilStartControl(controller: fixture.controller)
+
+        let todayPreview = UntilDeadlineFormatting.string(
+            for: displayedDeadline,
+            now: beforeNoon,
+            calendar: calendar,
+            locale: Locale(identifier: "en_GB"),
+            timeZone: timeZone
+        )
+        #expect(todayPreview.hasPrefix("Today, "))
+
+        fixture.clock.currentDate = afterNoon
+        #expect(!control.startUntil(displayedDeadline))
+        #expect(fixture.controller.session == .idle)
+        #expect(fixture.service.activationCount == 0)
+        #expect(fixture.scheduler.scheduledDeadlines.isEmpty)
+
+        let refreshedDeadline = try #require(WallClockDeadline.nextOccurrence(
+            of: selection,
+            after: afterNoon,
+            calendar: calendar
+        ))
+        let tomorrowPreview = UntilDeadlineFormatting.string(
+            for: refreshedDeadline,
+            now: afterNoon,
+            calendar: calendar,
+            locale: Locale(identifier: "en_GB"),
+            timeZone: timeZone
+        )
+        #expect(tomorrowPreview.hasPrefix("Tomorrow, "))
+        #expect(control.startUntil(refreshedDeadline))
+        #expect(fixture.controller.session == .timed(deadline: refreshedDeadline))
+        #expect(fixture.service.activationCount == 1)
+        #expect(fixture.scheduler.scheduledDeadlines == [refreshedDeadline])
+
+        let freshFixture = SessionControllerFixture(startDate: beforeNoon, keepsDisplayAwake: false)
+        let freshControl = UntilStartControl(controller: freshFixture.controller)
+        #expect(freshControl.startUntil(displayedDeadline))
+        #expect(freshFixture.controller.session == .timed(deadline: displayedDeadline))
+        #expect(freshFixture.scheduler.scheduledDeadlines == [displayedDeadline])
+
+        let equalFixture = SessionControllerFixture(startDate: displayedDeadline, keepsDisplayAwake: false)
+        #expect(!UntilStartControl(controller: equalFixture.controller).startUntil(displayedDeadline))
+        #expect(equalFixture.controller.session == .idle)
+        #expect(equalFixture.service.activationCount == 0)
+        #expect(equalFixture.scheduler.scheduledDeadlines.isEmpty)
+    }
 
     @Test("quit shuts down before invoking termination")
     func quitActionCleansUpBeforeTermination() {
@@ -318,5 +397,76 @@ struct MenuPresentationTests {
         #expect(service.displayDisableCount == 1)
         #expect(controller.session == .idle)
         #expect(controller.keepsDisplayAwake)
+    }
+}
+
+extension MenuPresentationTests {
+    @Test("menu bar images stay compact and fit their content")
+    func menuBarWidthFitsContent() {
+        let idle = MenuBarIconRenderer.image(for: .idle)
+        #expect(idle.size == NSSize(width: 20, height: 20))
+        let short = MenuBarActiveLabelRenderer.image(for: .countdown("1m"))
+        let longer = MenuBarActiveLabelRenderer.image(for: .countdown("1h30m"))
+        #expect(longer.size.width > short.size.width)
+        for content in [
+            MenuBarActiveLabelContent.indefinite,
+            .countdown("1m"),
+            .countdown("1h30m"),
+            .countdown("999999999999999h"),
+        ] {
+            let image = MenuBarActiveLabelRenderer.image(for: content)
+            #expect(image.size.width > 0)
+            #expect(image.size.height == 20)
+            #expect(image.isTemplate)
+            #expect(image.accessibilityDescription == content.display)
+        }
+    }
+
+    @Test("end date follows local midnight, tomorrow, and later years")
+    func endDateIncludesLocalDay() throws {
+        let utc = try #require(TimeZone(secondsFromGMT: 0))
+        let west = try #require(TimeZone(secondsFromGMT: -8 * 3600))
+        let calendar = Calendar(identifier: .gregorian)
+        let now = Date(timeIntervalSince1970: 0)
+        let nextDay = now.addingTimeInterval(24 * 3600)
+        let english = Locale(identifier: "en_GB")
+        #expect(EndTimeFormatting.string(
+            for: nextDay,
+            now: now,
+            calendar: calendar,
+            locale: english,
+            timeZone: utc
+        ) == "tomorrow at 00:00")
+        #expect(EndTimeFormatting.string(
+            for: now,
+            now: now.addingTimeInterval(-3600),
+            calendar: calendar,
+            locale: english,
+            timeZone: utc
+        ) == "tomorrow at 00:00")
+        #expect(EndTimeFormatting.string(
+            for: now,
+            now: now.addingTimeInterval(-3600),
+            calendar: calendar,
+            locale: english,
+            timeZone: west
+        ) == "today at 16:00")
+        let twelveHour = EndTimeFormatting.string(
+            for: now,
+            now: now,
+            calendar: calendar,
+            locale: Locale(identifier: "en_US"),
+            timeZone: west
+        )
+        #expect(twelveHour.contains("4:00"))
+        #expect(twelveHour.contains("PM"))
+        let later = try #require(ISO8601DateFormatter().date(from: "2027-01-02T18:30:00Z"))
+        #expect(EndTimeFormatting.string(
+            for: later,
+            now: now,
+            calendar: calendar,
+            locale: english,
+            timeZone: utc
+        ) == "02/01/2027, 18:30")
     }
 }

@@ -72,23 +72,17 @@ enum QuickDurationAction: Hashable {
 
     var sectionTitle: String {
         switch self {
-        case .start:
-            "Start for"
-        case .extend:
+        case .start, .extend:
             "Add time"
         case .shorten:
             "Remove time"
         }
     }
 
-    func title(for choice: QuickDurationChoice) -> String {
+    var sign: String {
         switch self {
-        case .start:
-            choice.title
-        case .extend:
-            "+\(choice.title)"
-        case .shorten:
-            "-\(choice.title)"
+        case .start, .extend: "+"
+        case .shorten: "−"
         }
     }
 
@@ -109,8 +103,10 @@ enum QuickDurationAction: Hashable {
         at date: Date
     ) -> Bool {
         switch self {
-        case .start, .extend:
-            true
+        case .start:
+            session == .idle
+        case .extend:
+            session.deadline != nil
         case .shorten:
             session.canShorten(by: choice.duration, at: date)
         }
@@ -149,16 +145,14 @@ enum SessionPresentationState: Equatable {
     var quickDurationActions: [QuickDurationAction] {
         switch self {
         case .idle:
-            [.start]
-        case .timed:
+            [.start, .shorten]
+        case .timed, .indefinite:
             [.extend, .shorten]
-        case .indefinite:
-            []
         }
     }
 
     var quickDurationChoices: [QuickDurationChoice] {
-        quickDurationActions.isEmpty ? [] : QuickDurationChoice.allCases
+        QuickDurationChoice.allCases
     }
 
     var canStartUntil: Bool {
@@ -181,13 +175,8 @@ enum AppQuitAction {
 enum DisplayAwakeTogglePresentation {
     static let label = "Keep display awake"
     static let systemImage = "display"
-    static let enabledDescription = "Screen stays on during sessions"
-    static let disabledDescription = "Screen may sleep; Mac stays awake"
+    static let description = "During sessions only"
     static let accessibilityHint = "Prevents automatic display dimming and sleep only during an active UpTil session"
-
-    static func description(isEnabled: Bool) -> String {
-        isEnabled ? enabledDescription : disabledDescription
-    }
 
     @MainActor
     static func perform(isEnabled: Bool, controller: SessionController) {
@@ -211,16 +200,23 @@ struct SessionPopover: View {
 
             displayAwakeToggle
 
-            ForEach(presentationState.quickDurationActions, id: \.self) { action in
-                quickDurationSection(action: action)
-            }
+            Divider()
 
-            switch presentationState {
-            case .idle:
-                idleSecondaryControls
-            case .timed, .indefinite:
-                stopControl
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(presentationState.quickDurationActions, id: \.self) { action in
+                    quickDurationSection(action: action)
+                }
+
+                Spacer(minLength: 0)
+
+                switch presentationState {
+                case .idle:
+                    idleSecondaryControls
+                case .timed, .indefinite:
+                    stopControl
+                }
             }
+            .frame(height: 224, alignment: .topLeading)
 
             Divider()
 
@@ -234,6 +230,7 @@ struct SessionPopover: View {
         }
         .padding(16)
         .frame(width: 300)
+        .transaction { $0.animation = nil }
     }
 
     private var displayAwakeToggle: some View {
@@ -255,11 +252,9 @@ struct SessionPopover: View {
             .accessibilityLabel("Keep display awake")
             .accessibilityHint(DisplayAwakeTogglePresentation.accessibilityHint)
 
-            Text(DisplayAwakeTogglePresentation.description(
-                isEnabled: controller.keepsDisplayAwake
-            ))
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text(DisplayAwakeTogglePresentation.description)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -274,45 +269,58 @@ struct SessionPopover: View {
                 indefiniteStatus
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 54, alignment: .topLeading)
     }
 
     private var idleStatus: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Keep your Mac awake")
+            Text("No active session")
                 .font(.title2)
 
-            Text("Choose a duration to begin")
+            Text("Choose a duration to stay awake")
                 .foregroundStyle(.secondary)
         }
     }
 
-    private var timedStatus: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            TimelineView(.animation(minimumInterval: 1)) { context in
-                Text(remainingText(at: context.date))
-                    .font(.title2)
-                    .monospacedDigit()
-                    .accessibilityLabel("\(remainingText(at: context.date)) remaining")
-            }
+    @ViewBuilder private var timedStatus: some View {
+        if let deadline = controller.session.deadline {
+            TimelineView(.everyMinute) { context in
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(timerInterval: min(context.date, deadline) ... deadline, showsHours: true)
+                            .font(.title2)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .frame(width: 100, alignment: .leading)
+                        Text("remaining")
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityElement(children: .combine)
 
-            if let deadline = controller.session.deadline {
-                Text(EndTimeFormatting.string(for: deadline))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Session ends at \(EndTimeFormatting.string(for: deadline))")
+                    Text("Until \(EndTimeFormatting.string(for: deadline, now: context.date))")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityLabel(
+                            "Session ends \(EndTimeFormatting.string(for: deadline, now: context.date))"
+                        )
+                }
             }
         }
     }
 
     private var indefiniteStatus: some View {
-        Label("∞  Indefinitely", systemImage: "infinity")
-            .font(.title2)
-            .accessibilityLabel("Running indefinitely")
+        VStack(alignment: .leading, spacing: 4) {
+            Label("Awake until stopped", systemImage: "infinity")
+                .font(.title2)
+            Text("Stop the session to allow sleep")
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
     private func quickDurationSection(action: QuickDurationAction) -> some View {
-        if action == .shorten {
+        if action == .shorten, presentationState == .timed {
             TimelineView(.animation(minimumInterval: 1)) { context in
                 quickDurationControls(action: action, at: context.date)
             }
@@ -329,18 +337,21 @@ struct SessionPopover: View {
 
             HStack(spacing: 8) {
                 ForEach(presentationState.quickDurationChoices) { choice in
+                    let isEnabled = action.isEnabled(for: choice, session: controller.session, at: date)
                     Button {
                         action.perform(choice: choice, controller: controller)
                     } label: {
-                        Text(action.title(for: choice))
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 0) {
+                            Text(action.sign)
+                                .frame(width: 8)
+                            Text(choice.title)
+                                .monospacedDigit()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .foregroundStyle(isEnabled ? (action == .shorten ? .secondary : .primary) : .tertiary)
                     }
                     .accessibilityLabel(action.accessibilityLabel(for: choice))
-                    .disabled(!action.isEnabled(
-                        for: choice,
-                        session: controller.session,
-                        at: date
-                    ))
+                    .disabled(!isEnabled)
                 }
             }
             .buttonStyle(.bordered)
@@ -352,7 +363,7 @@ struct SessionPopover: View {
         VStack(alignment: .leading, spacing: 8) {
             UntilStartControl(controller: controller)
 
-            Button("Indefinitely") {
+            Button("Indefinitely", systemImage: "infinity") {
                 controller.startIndefinitely()
             }
             .accessibilityLabel("Start an indefinite session")
@@ -361,79 +372,60 @@ struct SessionPopover: View {
 
     @ViewBuilder private var stopControl: some View {
         if presentationState.canStop {
-            Button("Stop", role: .destructive) {
+            Button("Stop", systemImage: "stop.fill", role: .destructive) {
                 controller.stop()
             }
             .accessibilityLabel("Stop the active session")
         }
     }
-
-    private func remainingText(at date: Date) -> String {
-        guard let remaining = controller.session.remaining(at: date), remaining > 0 else {
-            return "<1m"
-        }
-
-        return CompactDurationFormatter.string(remaining: remaining)
-    }
 }
 
-private struct UntilStartControl: View {
+struct UntilStartControl: View {
     @Bindable var controller: SessionController
     @State private var selectedTime = Date().addingTimeInterval(60 * 60)
 
     var body: some View {
-        let now = Date()
-        let deadline = WallClockDeadline.nextOccurrence(
-            of: selectedTime,
-            after: now,
-            calendar: .current
-        )
-
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Until")
-                .font(.subheadline)
-
-            DatePicker(
-                "Choose session end time",
-                selection: $selectedTime,
-                displayedComponents: .hourAndMinute
+        TimelineView(.everyMinute) { _ in
+            let now = Date()
+            let deadline = WallClockDeadline.nextOccurrence(
+                of: selectedTime,
+                after: now,
+                calendar: .current
             )
-            .labelsHidden()
-            .accessibilityLabel("Choose session end time")
 
-            if let deadline {
-                Text(UntilDeadlineFormatting.string(for: deadline, now: now))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Label("Until", systemImage: "clock")
+                        .font(.subheadline)
 
-                Button("Start Until") {
-                    startUntil()
-                }
-                .accessibilityLabel("Start session until selected time")
-            } else {
-                Text("Invalid end time")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    DatePicker(
+                        "Choose session end time",
+                        selection: $selectedTime,
+                        displayedComponents: .hourAndMinute
+                    )
+                    .labelsHidden()
+                    .accessibilityLabel("Choose session end time")
 
-                Button("Start Until") {}
-                    .disabled(true)
+                    Spacer(minLength: 0)
+
+                    Button("Start") {
+                        if let deadline {
+                            _ = startUntil(deadline)
+                        }
+                    }
+                    .disabled(deadline == nil)
                     .accessibilityLabel("Start session until selected time")
+                }
+
+                Text(deadline.map { UntilDeadlineFormatting.string(for: $0, now: now) } ?? "Invalid end time")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
     }
 
-    private func startUntil() {
-        let currentTime = Date()
-        guard
-            let deadline = WallClockDeadline.nextOccurrence(
-                of: selectedTime,
-                after: currentTime,
-                calendar: .current
-            )
-        else {
-            return
-        }
-
+    func startUntil(_ deadline: Date) -> Bool {
         controller.start(until: deadline)
     }
 }

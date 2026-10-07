@@ -62,6 +62,7 @@ enum MenuBarActiveLabelRenderer {
         glyph.draw(at: drawingPoint)
         image.unlockFocus()
         image.isTemplate = true
+        image.accessibilityDescription = content.display
         return image
     }
 }
