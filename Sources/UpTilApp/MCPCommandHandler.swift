@@ -232,11 +232,17 @@ private extension MCPCommandHandler {
         case .start:
             result = controller.start(for: duration)
         case .extend:
+            guard !controller.session.isPaused else {
+                return .result(toolError("Cannot extend: the session is paused.", at: currentDate))
+            }
             guard case .timed = controller.session else {
                 return .result(toolError("Cannot extend: a timed session is required.", at: currentDate))
             }
             result = controller.extend(by: duration)
         case .shorten:
+            guard !controller.session.isPaused else {
+                return .result(toolError("Cannot shorten: the session is paused.", at: currentDate))
+            }
             guard let deadline = controller.session.deadline else {
                 return .result(toolError("Cannot shorten: a timed session is required.", at: currentDate))
             }
@@ -316,6 +322,8 @@ private extension MCPCommandHandler {
             .indefinite(pid: pid())
         case let .timed(deadline):
             .timed(until: deadline, pid: pid())
+        case let .paused(remaining):
+            .paused(remaining: remaining, pid: pid())
         }
     }
 

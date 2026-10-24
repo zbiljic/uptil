@@ -198,6 +198,44 @@ struct MCPCommandHandlerTests {
         #expect(fixture.controller.session == .timed(deadline: fixture.date.addingTimeInterval(1.5)))
     }
 
+    @Test("paused sessions report frozen status, reject adjustments, and can be replaced or stopped")
+    func pausedSessions() throws {
+        let fixture = Fixture()
+        #expect(fixture.controller.start(for: 720))
+        #expect(fixture.controller.pause())
+        fixture.date = fixture.date.addingTimeInterval(3600)
+
+        let status = try fixture.tool("uptil.status")
+        #expect(status.text == "Paused with 12m remaining.")
+        #expect(status.structured == .object([
+            "schemaVersion": .number(1), "state": .string("paused"), "assertionActive": .bool(false),
+            "remainingSeconds": .number(720), "pid": .number(77),
+        ]))
+        expectLiveStatus(status.structured)
+        for (tool, message) in [
+            ("uptil.extend", "Cannot extend: the session is paused."),
+            ("uptil.shorten", "Cannot shorten: the session is paused."),
+        ] {
+            let rejected = try fixture.tool(tool, arguments: ["durationSeconds": .number(60)])
+            #expect(rejected.isError)
+            #expect(rejected.text == message)
+            #expect(rejected.structured?.objectValue?["state"] == .string("paused"))
+        }
+        #expect(fixture.controller.session == .paused(remaining: 720))
+
+        #expect(try fixture.tool("uptil.start", arguments: ["durationSeconds": .number(60)]).isError == false)
+        #expect(fixture.controller.session == .timed(deadline: fixture.date.addingTimeInterval(60)))
+        #expect(fixture.controller.pause())
+        #expect(try fixture.tool("uptil.indefinite").isError == false)
+        #expect(fixture.controller.session == .indefinite)
+        #expect(fixture.controller.start(for: 60))
+        #expect(fixture.controller.pause())
+        #expect(try fixture.tool("uptil.stop").isError == false)
+        #expect(fixture.controller.session == .idle)
+        #expect(fixture.service.activationCount == 3)
+        #expect(fixture.service.deactivationCount == 3)
+    }
+
     @Test("status uses one clock snapshot for refresh and rendering")
     func consistentStatusSnapshot() throws {
         let fixture = Fixture()
@@ -348,10 +386,11 @@ private func expectLiveStatus(_ status: JSONValue?) {
         Issue.record("missing flat status")
         return
     }
+    let isPaused = object["state"] == .string("paused")
     for removed in [
         "apiVersion", "appRunning", "status", "kind", "deadline", "deadlineEpochSeconds", "remainingSeconds", "appPID",
         "problem", "type", "title", "detail", "code", "reason", "domain", "category", "errorCategory",
-    ] {
+    ] where !(isPaused && removed == "remainingSeconds") {
         #expect(object[removed] == nil)
     }
 }

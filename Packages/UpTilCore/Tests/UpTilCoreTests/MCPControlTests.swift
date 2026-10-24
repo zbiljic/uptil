@@ -124,6 +124,10 @@ struct MCPControlTests {
                 ["schemaVersion", "state", "assertionActive", "pid"],
                 ["schemaVersion", "state", "assertionActive", "pid"]
             ),
+            (
+                ["schemaVersion", "state", "assertionActive", "remainingSeconds", "pid"],
+                ["schemaVersion", "state", "assertionActive", "remainingSeconds", "pid"]
+            ),
         ]
         #expect(branches.count == expectedBranches.count)
         for (branch, expected) in zip(branches, expectedBranches) {
@@ -249,5 +253,74 @@ struct MCPControlTests {
         #expect(MCPHumanResult.parse(.object([
             "structuredContent": .object(["schemaVersion": .number(2)]), "isError": .bool(false),
         ]), jsonOnly: true) == nil)
+    }
+}
+
+extension MCPControlTests {
+    @Test("paused status uses exact flat JSON and round-trips")
+    func pausedStatusEncoding() throws {
+        let paused = UpTilLiveStatus.paused(remaining: 720, pid: 42)
+        let encoded = try MCPControl.encoder().encode(paused)
+        #expect(try String(bytes: encoded, encoding: .utf8) ==
+            "{\"assertionActive\":false,\"pid\":42,\"remainingSeconds\":720,\"schemaVersion\":1,\"state\":\"paused\"}")
+        #expect(try MCPControl.decoder().decode(UpTilLiveStatus.self, from: encoded) == paused)
+        let fractional = UpTilLiveStatus.paused(remaining: 719.5, pid: 42)
+        #expect(try MCPControl.decoder().decode(
+            UpTilLiveStatus.self,
+            from: MCPControl.encoder().encode(fractional)
+        ) == fractional)
+        #expect(paused.text == "Paused with 12m remaining.")
+        #expect(paused.until == nil)
+        for invalid in [0, -1, TimeInterval.nan, .infinity] {
+            #expect(throws: Error.self) {
+                try MCPControl.encoder().encode(UpTilLiveStatus.paused(remaining: invalid, pid: 42))
+            }
+        }
+    }
+
+    @Test("paused status rejects malformed payloads")
+    func pausedStatusRejectsMalformedPayloads() {
+        let valid = "\"schemaVersion\":1,\"state\":\"paused\",\"pid\":42"
+        for invalid in [
+            "{\(valid),\"assertionActive\":false}",
+            "{\(valid),\"assertionActive\":false,\"remainingSeconds\":720,\"extra\":true}",
+            "{\(valid),\"assertionActive\":true,\"remainingSeconds\":720}",
+            "{\(valid),\"assertionActive\":false,\"remainingSeconds\":720,\"until\":\"2026-08-22T22:30:00Z\"}",
+            "{\(valid),\"assertionActive\":false,\"remainingSeconds\":0}",
+            "{\(valid),\"assertionActive\":false,\"remainingSeconds\":-1}",
+            "{\(valid),\"assertionActive\":false,\"remainingSeconds\":\"720\"}",
+            "{\(valid),\"assertionActive\":false,\"remainingSeconds\":true}",
+        ] {
+            #expect(throws: Error.self) {
+                try MCPControl.decoder().decode(UpTilLiveStatus.self, from: Data(invalid.utf8))
+            }
+        }
+    }
+
+    @Test("paused status matches its schema branch and parses for the CLI")
+    func pausedStatusSchemaAndHumanResult() throws {
+        guard case let .array(branches)? = MCPTool.statusOutputSchema.objectValue?["oneOf"] else {
+            Issue.record("missing status oneOf branches")
+            return
+        }
+        let properties = try #require(branches.last?.objectValue?["properties"]?.objectValue)
+        #expect(properties["state"] == .object(["const": .string("paused")]))
+        #expect(properties["assertionActive"] == .object(["const": .bool(false)]))
+        #expect(properties["remainingSeconds"] == .object([
+            "type": .string("number"), "exclusiveMinimum": .number(0),
+        ]))
+
+        let structured = try MCPControl.decoder().decode(
+            JSONValue.self,
+            from: MCPControl.encoder().encode(UpTilLiveStatus.paused(remaining: 720, pid: 42))
+        )
+        let result: JSONValue = .object([
+            "content": .array([.object(["type": .string("text"), "text": .string("Paused with 12m remaining.")])]),
+            "structuredContent": structured,
+            "isError": .bool(false),
+        ])
+        #expect(MCPHumanResult.parse(result, jsonOnly: false)?.output == "Paused with 12m remaining.")
+        let json = try #require(MCPHumanResult.parse(result, jsonOnly: true)?.output)
+        #expect(json.contains("\"state\":\"paused\""))
     }
 }

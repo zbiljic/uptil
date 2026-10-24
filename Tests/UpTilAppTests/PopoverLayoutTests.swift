@@ -21,11 +21,8 @@ struct PopoverLayoutTests {
         window.contentView = host
         defer { window.close() }
         var sizes: [NSSize] = []
-        for state in [
-            "idle", "timed", "extended", "display", "under-minute", "tick",
-            "indefinite", "limited", "over-ten-hours", "stopped",
-        ] {
-            try await enter(state, controller: controller)
+        for (state, enter) in steps {
+            try await enter(controller)
             host.layoutSubtreeIfNeeded()
             let size = host.fittingSize
             host.setFrameSize(size)
@@ -39,20 +36,21 @@ struct PopoverLayoutTests {
         #expect(sizes.allSatisfy { $0 == baselineSize })
     }
 
-    private func enter(_ state: String, controller: SessionController) async throws {
-        switch state {
-        case "timed": controller.start(for: 15 * 60)
-        case "extended": controller.extend(by: 75 * 60)
-        case "display": controller.setKeepsDisplayAwake(true)
-        case "under-minute": controller.start(for: 45)
-        case "tick": try await Task.sleep(for: .milliseconds(1200))
-        case "indefinite": controller.startIndefinitely()
-        case "limited": QuickDurationAction.limit.perform(choice: .oneHour, controller: controller)
-        case "over-ten-hours": controller.extend(by: 10 * 3600)
-        case "stopped": controller.stop()
-        default: break
-        }
-    }
+    /// Each step changes the session the way a click or command would; the popover is measured after each.
+    private let steps: [(String, @MainActor (SessionController) async throws -> Void)] = [
+        ("idle", { _ in }),
+        ("timed", { $0.start(for: 15 * 60) }),
+        ("extended", { $0.extend(by: 75 * 60) }),
+        ("display", { $0.setKeepsDisplayAwake(true) }),
+        ("under-minute", { $0.start(for: 45) }),
+        ("tick", { _ in try await Task.sleep(for: .milliseconds(1200)) }),
+        ("indefinite", { $0.startIndefinitely() }),
+        ("limited", { QuickDurationAction.limit.perform(choice: .oneHour, controller: $0) }),
+        ("over-ten-hours", { $0.extend(by: 10 * 3600) }),
+        ("paused", { $0.pause() }),
+        ("resumed", { $0.resume() }),
+        ("stopped", { $0.stop() }),
+    ]
 
     private func render(_ host: NSView, name: String) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("UpTilPopoverRefinementReview")

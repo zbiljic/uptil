@@ -127,6 +127,7 @@ enum SessionPresentationState: Equatable {
     case idle
     case timed
     case indefinite
+    case paused
 
     init(session: KeepAwakeSession) {
         switch session {
@@ -136,14 +137,17 @@ enum SessionPresentationState: Equatable {
             self = .timed
         case .indefinite:
             self = .indefinite
+        case .paused:
+            self = .paused
         }
     }
 
+    /// A paused session keeps the timed rows in place; they stay disabled until it resumes.
     var quickDurationActions: [QuickDurationAction] {
         switch self {
         case .idle:
             [.start, .shorten]
-        case .timed:
+        case .timed, .paused:
             [.extend, .shorten]
         case .indefinite:
             [.limit, .shorten]
@@ -161,6 +165,10 @@ enum SessionPresentationState: Equatable {
     var canStop: Bool {
         self != .idle
     }
+
+    var stopAccessibilityLabel: String {
+        self == .paused ? "Stop the paused session and discard its remaining time" : "Stop the active session"
+    }
 }
 
 enum AppQuitAction {
@@ -175,6 +183,7 @@ enum DisplayAwakeTogglePresentation {
     static let label = "Keep display awake"
     static let systemImage = "display"
     static let description = "During sessions only"
+    static let pausedDescription = "Applies when the session resumes"
     static let accessibilityHint = "Prevents automatic display dimming and sleep only during an active UpTil session"
 
     @MainActor
@@ -229,24 +238,49 @@ struct SessionPopover: View {
         switch presentationState {
         case .idle:
             IdleStartControls(controller: controller)
-        case .timed, .indefinite:
+        case .timed, .indefinite, .paused:
             VStack(spacing: SessionPopoverLayout.heroSpacing) {
                 activeHero
                     .frame(maxWidth: .infinity)
                     .frame(height: SessionPopoverLayout.heroHeight)
 
-                Button("Stop", systemImage: "stop.fill", role: .destructive) {
-                    controller.stop()
+                HStack(spacing: 12) {
+                    if let pauseAction = SessionPauseAction(state: presentationState) {
+                        pauseButton(pauseAction)
+                    }
+
+                    Button("Stop", systemImage: "stop.fill", role: .destructive) {
+                        controller.stop()
+                    }
+                    .accessibilityLabel(presentationState.stopAccessibilityLabel)
                 }
-                .accessibilityLabel("Stop the active session")
                 .frame(height: SessionPopoverLayout.sessionRowHeight)
             }
         }
     }
 
+    private func pauseButton(_ action: SessionPauseAction) -> some View {
+        Button {
+            action.perform(controller: controller)
+        } label: {
+            // Every title reserves its width, so Stop stays put when Pause turns into Resume.
+            ZStack {
+                ForEach(SessionPauseAction.allCases, id: \.self) { candidate in
+                    Label(candidate.title, systemImage: candidate.systemImage)
+                        .hidden()
+                }
+                Label(action.title, systemImage: action.systemImage)
+            }
+        }
+        .accessibilityLabel(action.accessibilityLabel)
+        .accessibilityHint(action.accessibilityHint)
+    }
+
     @ViewBuilder private var activeHero: some View {
         if let deadline = controller.session.deadline {
             CountdownHero(deadline: deadline)
+        } else if case let .paused(remaining) = controller.session {
+            PausedCountdownHero(remaining: remaining)
         } else {
             VStack(spacing: 0) {
                 Image(systemName: "infinity")
@@ -336,7 +370,11 @@ struct SessionPopover: View {
         }
         .toggleStyle(.switch)
         .controlSize(.mini)
-        .help(DisplayAwakeTogglePresentation.description)
+        .help(
+            presentationState == .paused
+                ? DisplayAwakeTogglePresentation.pausedDescription
+                : DisplayAwakeTogglePresentation.description
+        )
         .accessibilityLabel("Keep display awake")
         .accessibilityHint(DisplayAwakeTogglePresentation.accessibilityHint)
     }

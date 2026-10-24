@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UpTilCore
 
 enum MenuBarIconState {
     case idle
@@ -74,9 +75,15 @@ struct MenuBarLabel: View {
                 .accessibilityLabel("UpTil idle")
         case .indefinite:
             Image(nsImage: MenuBarActiveLabelRenderer.image(for: .indefinite))
-                .accessibilityLabel("UpTil is active indefinitely")
+                .accessibilityLabel(MenuBarActiveLabelContent.indefinite.accessibilityLabel)
         case let .timed(deadline):
             MenuBarCountdownView(deadline: deadline)
+        case let .paused(remaining):
+            let content = MenuBarActiveLabelContent.paused(
+                MenuBarCountdownFormatting.durationString(remaining: remaining)
+            )
+            Image(nsImage: MenuBarActiveLabelRenderer.image(for: content))
+                .accessibilityLabel(content.accessibilityLabel)
         }
     }
 }

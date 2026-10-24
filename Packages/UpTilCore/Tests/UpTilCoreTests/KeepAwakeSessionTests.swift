@@ -348,3 +348,147 @@ struct KeepAwakeSessionTests {
         #expect(session.remaining(at: now.addingTimeInterval(1)) == 0)
     }
 }
+
+extension KeepAwakeSessionTests {
+    @Test("pause freezes the exact remaining time and releases activity")
+    func pauseFreezesRemainingTime() {
+        var session = KeepAwakeSession.timed(deadline: now.addingTimeInterval(90.25))
+
+        let paused = session.pause(at: now)
+        let expired = session.expireIfNeeded(at: now.addingTimeInterval(3600))
+
+        #expect(paused)
+        #expect(!expired)
+        #expect(session == .paused(remaining: 90.25))
+        #expect(session.isPaused)
+        #expect(!session.isActive)
+        #expect(session.deadline == nil)
+        #expect(session.remaining(at: now.addingTimeInterval(3600)) == 90.25)
+        #expect(!session.isExpired(at: now.addingTimeInterval(3600)))
+    }
+
+    @Test("resume continues from the saved time, so the deadline moves later")
+    func resumeMovesDeadlineLater() {
+        var session = KeepAwakeSession.paused(remaining: 90.25)
+        let resumedAt = now.addingTimeInterval(3600)
+
+        let resumed = session.resume(at: resumedAt)
+
+        #expect(resumed)
+        #expect(session == .timed(deadline: resumedAt.addingTimeInterval(90.25)))
+        #expect(!session.isExpired(at: resumedAt.addingTimeInterval(90)))
+        #expect(session.isExpired(at: resumedAt.addingTimeInterval(90.25)))
+    }
+
+    @Test("repeated pause and resume cycles keep fractional seconds")
+    func pauseResumeCyclesKeepFractions() {
+        var session = KeepAwakeSession.idle
+
+        let started = session.start(for: 100.5, now: now)
+        let firstPause = session.pause(at: now.addingTimeInterval(10.25))
+        let firstSaved = session
+        let firstResume = session.resume(at: now.addingTimeInterval(1000))
+        let secondPause = session.pause(at: now.addingTimeInterval(1030.125))
+        let secondSaved = session
+        let secondResume = session.resume(at: now.addingTimeInterval(5000))
+
+        #expect(started && firstPause && firstResume && secondPause && secondResume)
+        #expect(firstSaved == .paused(remaining: 90.25))
+        #expect(secondSaved == .paused(remaining: 60.125))
+        #expect(session == .timed(deadline: now.addingTimeInterval(5060.125)))
+    }
+
+    @Test("pause rejects other states, ended timers, and invalid times without changing state")
+    func invalidPausesAreRejected() {
+        let deadline = now.addingTimeInterval(60)
+        for original in [KeepAwakeSession.idle, .indefinite, .paused(remaining: 30)] {
+            var session = original
+            let paused = session.pause(at: now)
+            #expect(!paused)
+            #expect(session == original)
+        }
+        for date in [deadline, deadline.addingTimeInterval(1), Date(timeIntervalSinceReferenceDate: .nan)] {
+            var session = KeepAwakeSession.timed(deadline: deadline)
+            let paused = session.pause(at: date)
+            #expect(!paused)
+            #expect(session == .timed(deadline: deadline))
+        }
+    }
+
+    @Test("resume rejects other states and invalid saved or resulting deadlines")
+    func invalidResumesAreRejected() {
+        for original in [KeepAwakeSession.idle, .indefinite, .timed(deadline: now.addingTimeInterval(60))] {
+            var session = original
+            let resumed = session.resume(at: now)
+            #expect(!resumed)
+            #expect(session == original)
+        }
+        for remaining in [0, -1, TimeInterval.infinity, 1e-300] {
+            var session = KeepAwakeSession.paused(remaining: remaining)
+            let resumed = session.resume(at: now)
+            #expect(!resumed)
+            #expect(session == .paused(remaining: remaining))
+        }
+        var notANumber = KeepAwakeSession.paused(remaining: .nan)
+        var invalidNow = KeepAwakeSession.paused(remaining: 60)
+        var overflowing = KeepAwakeSession.paused(remaining: .greatestFiniteMagnitude)
+
+        let notANumberResumed = notANumber.resume(at: now)
+        let invalidNowResumed = invalidNow.resume(at: Date(timeIntervalSinceReferenceDate: .nan))
+        let overflowingResumed = overflowing.resume(at: Date(timeIntervalSinceReferenceDate: .greatestFiniteMagnitude))
+
+        #expect(!notANumberResumed)
+        #expect(notANumber.remaining(at: now)?.isNaN == true)
+        #expect(!invalidNowResumed)
+        #expect(invalidNow == .paused(remaining: 60))
+        #expect(!overflowingResumed)
+        #expect(overflowing == .paused(remaining: .greatestFiniteMagnitude))
+    }
+
+    @Test("stop discards a paused session")
+    func stopDiscardsPausedSession() {
+        var session = KeepAwakeSession.paused(remaining: 30)
+
+        let stopped = session.stop()
+        let stoppedAgain = session.stop()
+
+        #expect(stopped)
+        #expect(!stoppedAgain)
+        #expect(session == .idle)
+    }
+
+    @Test("paused sessions reject adjustments and invalid starts")
+    func pausedSessionRejectsAdjustments() {
+        let paused = KeepAwakeSession.paused(remaining: 30)
+        var session = paused
+
+        let extended = session.extend(by: 60)
+        let shortened = session.shorten(by: 10, at: now)
+        let zeroStart = session.start(for: 0, now: now)
+        let staleStart = session.start(until: now, now: now)
+
+        #expect(!extended)
+        #expect(!session.canShorten(by: 10, at: now))
+        #expect(!shortened)
+        #expect(!zeroStart)
+        #expect(!staleStart)
+        #expect(session == paused)
+    }
+
+    @Test("valid starts replace a paused session")
+    func validStartsReplacePausedSession() {
+        var timed = KeepAwakeSession.paused(remaining: 30)
+        var absolute = KeepAwakeSession.paused(remaining: 30)
+        var indefinite = KeepAwakeSession.paused(remaining: 30)
+
+        let timedStarted = timed.start(for: 60, now: now)
+        let absoluteStarted = absolute.start(until: now.addingTimeInterval(90), now: now)
+        indefinite.startIndefinitely()
+
+        #expect(timedStarted)
+        #expect(absoluteStarted)
+        #expect(timed == .timed(deadline: now.addingTimeInterval(60)))
+        #expect(absolute == .timed(deadline: now.addingTimeInterval(90)))
+        #expect(indefinite == .indefinite)
+    }
+}

@@ -20,29 +20,58 @@ struct CountdownHero: View {
     var body: some View {
         TimelineView(CountdownTimelineSchedule(deadline: deadline)) { context in
             let remaining = deadline.timeIntervalSince(context.date)
-            let parts = CountdownFormatting.parts(remaining: remaining)
             let endTime = EndTimeFormatting.string(for: deadline, now: context.date)
 
-            VStack(spacing: 0) {
-                // The hidden template fixes the width below ten hours. Trailing alignment keeps
-                // minutes and seconds in place when a tenth hour digit overflows to the left.
-                Text(verbatim: "0:00:00")
-                    .hidden()
-                    .overlay(alignment: .trailing) {
-                        (Text(parts.fadedPrefix).foregroundStyle(.tertiary) + Text(parts.value))
-                            .fixedSize()
-                    }
-                    .font(SessionPopoverLayout.heroFont)
-
-                Text("remaining · ends \(endTime)")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(
-                "\(CountdownFormatting.accessibilityDuration(remaining: remaining)) remaining, session ends \(endTime)"
-            )
+            CountdownHeroContent(remaining: remaining, caption: "remaining · ends \(endTime)")
+                .accessibilityLabel(
+                    "\(CountdownFormatting.accessibilityDuration(remaining: remaining)) remaining, session ends \(endTime)"
+                )
         }
+    }
+}
+
+enum PausedSessionPresentation {
+    static let caption = "Paused — Mac may sleep"
+
+    static func accessibilityLabel(remaining: TimeInterval, locale: Locale = .autoupdatingCurrent) -> String {
+        let duration = CountdownFormatting.accessibilityDuration(remaining: remaining, locale: locale)
+        return "Paused with \(duration) remaining. The Mac may sleep."
+    }
+}
+
+/// The frozen countdown of a paused session. It shows no end time, because resuming moves the end later.
+struct PausedCountdownHero: View {
+    let remaining: TimeInterval
+
+    var body: some View {
+        CountdownHeroContent(remaining: remaining, caption: PausedSessionPresentation.caption)
+            .accessibilityLabel(PausedSessionPresentation.accessibilityLabel(remaining: remaining))
+    }
+}
+
+private struct CountdownHeroContent: View {
+    let remaining: TimeInterval
+    let caption: String
+
+    var body: some View {
+        let parts = CountdownFormatting.parts(remaining: remaining)
+
+        VStack(spacing: 0) {
+            // The hidden template fixes the width below ten hours. Trailing alignment keeps
+            // minutes and seconds in place when a tenth hour digit overflows to the left.
+            Text(verbatim: "0:00:00")
+                .hidden()
+                .overlay(alignment: .trailing) {
+                    (Text(parts.fadedPrefix).foregroundStyle(.tertiary) + Text(parts.value))
+                        .fixedSize()
+                }
+                .font(SessionPopoverLayout.heroFont)
+
+            Text(caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .ignore)
     }
 }

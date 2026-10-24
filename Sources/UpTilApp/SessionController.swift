@@ -109,6 +109,30 @@ final class SessionController {
         return true
     }
 
+    /// Freezes a running timer and lets the Mac sleep. A timer that has already ended becomes idle instead.
+    @discardableResult
+    func pause() -> Bool {
+        let currentTime = now()
+        guard !expireIfNeeded(at: currentTime), session.pause(at: currentTime) else {
+            return false
+        }
+
+        cancelScheduledExpiry()
+        keepAwakeService.deactivate()
+        return true
+    }
+
+    @discardableResult
+    func resume() -> Bool {
+        guard session.resume(at: now()) else {
+            return false
+        }
+
+        activateAssertions()
+        scheduleExpiry()
+        return true
+    }
+
     @discardableResult
     func refresh(at date: Date) -> Bool {
         expireIfNeeded(at: date)

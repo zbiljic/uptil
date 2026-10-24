@@ -6,9 +6,22 @@ import UpTilCore
 enum MenuBarActiveLabelContent {
     case countdown(String)
     case indefinite
+    /// A frozen countdown: a static image, never a ticking task.
+    case paused(String)
 
     var display: String {
         "⟩\(center)⟨"
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case let .countdown(duration):
+            "UpTil active, \(duration) remaining"
+        case .indefinite:
+            "UpTil is active indefinitely"
+        case let .paused(duration):
+            "UpTil paused, \(duration) remaining. The Mac may sleep."
+        }
     }
 
     fileprivate var center: String {
@@ -17,12 +30,14 @@ enum MenuBarActiveLabelContent {
             duration
         case .indefinite:
             "∞"
+        case let .paused(duration):
+            "Ⅱ \(duration)"
         }
     }
 
     fileprivate var centerFont: NSFont {
         switch self {
-        case .countdown:
+        case .countdown, .paused:
             NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
         case .indefinite:
             NSFont.systemFont(ofSize: 14, weight: .regular)
@@ -81,10 +96,12 @@ struct MenuBarCountdownView: View {
 
     var body: some View {
         let remaining = deadline.timeIntervalSince(calculationDate)
-        let duration = MenuBarCountdownFormatting.durationString(remaining: remaining)
+        let content = MenuBarActiveLabelContent.countdown(
+            MenuBarCountdownFormatting.durationString(remaining: remaining)
+        )
 
-        Image(nsImage: MenuBarActiveLabelRenderer.image(for: .countdown(duration)))
-            .accessibilityLabel("UpTil active, \(duration) remaining")
+        Image(nsImage: MenuBarActiveLabelRenderer.image(for: content))
+            .accessibilityLabel(content.accessibilityLabel)
             .task(id: deadline) {
                 await refreshClock()
             }

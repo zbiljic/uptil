@@ -3,6 +3,7 @@
 import argparse
 import datetime
 import json
+import math
 import re
 
 
@@ -26,6 +27,8 @@ def verify_status(raw_status: str, expected_state: str, expected_pid: int) -> No
     expected_keys = {"schemaVersion", "state", "assertionActive", "pid"}
     if expected_state == "timed":
         expected_keys.add("until")
+    if expected_state == "paused":
+        expected_keys.add("remainingSeconds")
 
     require(isinstance(status, dict), "status must be an object")
     require(set(status) == expected_keys, "unexpected status keys")
@@ -36,7 +39,7 @@ def verify_status(raw_status: str, expected_state: str, expected_pid: int) -> No
         "assertionActive must be boolean",
     )
     require(
-        status["assertionActive"] == (expected_state != "idle"),
+        status["assertionActive"] == (expected_state in ("timed", "indefinite")),
         "unexpected assertion state",
     )
     require(
@@ -48,6 +51,12 @@ def verify_status(raw_status: str, expected_state: str, expected_pid: int) -> No
 
     if expected_state == "timed":
         parse_timestamp(status["until"])
+    if expected_state == "paused":
+        remaining = status["remainingSeconds"]
+        require(
+            type(remaining) in (int, float) and math.isfinite(remaining) and remaining > 0,
+            "remainingSeconds must be a positive finite number",
+        )
 
 
 def verify_deadline_delta(
@@ -69,7 +78,7 @@ def parse_arguments() -> argparse.Namespace:
 
     status = commands.add_parser("status", help="verify an exact status payload")
     status.add_argument("payload")
-    status.add_argument("expected_state", choices=("idle", "timed", "indefinite"))
+    status.add_argument("expected_state", choices=("idle", "timed", "indefinite", "paused"))
     status.add_argument("expected_pid", type=int)
 
     delta = commands.add_parser(

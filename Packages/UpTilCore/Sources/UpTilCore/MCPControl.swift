@@ -248,7 +248,7 @@ public enum MCPTool: String, CaseIterable, Sendable {
     }
 
     public static var statusOutputSchema: JSONValue {
-        func branch(state: String, assertionActive: Bool, allowsUntil: Bool) -> JSONValue {
+        func branch(state: String, assertionActive: Bool, extra: (key: String, schema: JSONValue)? = nil) -> JSONValue {
             var properties: [String: JSONValue] = [
                 "schemaVersion": .object(["const": .number(Double(MCPControl.statusSchemaVersion))]),
                 "state": .object(["const": .string(state)]),
@@ -258,9 +258,9 @@ public enum MCPTool: String, CaseIterable, Sendable {
             var required: [JSONValue] = [
                 .string("schemaVersion"), .string("state"), .string("assertionActive"), .string("pid"),
             ]
-            if allowsUntil {
-                properties["until"] = .object(["type": .string("string"), "format": .string("date-time")])
-                required.append(.string("until"))
+            if let extra {
+                properties[extra.key] = extra.schema
+                required.append(.string(extra.key))
             }
             return .object([
                 "type": .string("object"),
@@ -272,9 +272,18 @@ public enum MCPTool: String, CaseIterable, Sendable {
         return .object([
             "$schema": .string("https://json-schema.org/draft/2020-12/schema"),
             "oneOf": .array([
-                branch(state: "idle", assertionActive: false, allowsUntil: false),
-                branch(state: "timed", assertionActive: true, allowsUntil: true),
-                branch(state: "indefinite", assertionActive: true, allowsUntil: false),
+                branch(state: "idle", assertionActive: false),
+                branch(
+                    state: "timed",
+                    assertionActive: true,
+                    extra: ("until", .object(["type": .string("string"), "format": .string("date-time")]))
+                ),
+                branch(state: "indefinite", assertionActive: true),
+                branch(
+                    state: "paused",
+                    assertionActive: false,
+                    extra: ("remainingSeconds", .object(["type": .string("number"), "exclusiveMinimum": .number(0)]))
+                ),
             ]),
         ])
     }
@@ -295,15 +304,17 @@ public enum UpTilLiveStatus: Codable, Equatable, Sendable {
     case idle(pid: Int32)
     case timed(until: Date, pid: Int32)
     case indefinite(pid: Int32)
+    case paused(remaining: TimeInterval, pid: Int32)
 
-    enum CodingKeys: String, CodingKey { case schemaVersion, state, until, assertionActive, pid }
-    enum State: String, Codable { case idle, timed, indefinite }
+    enum CodingKeys: String, CodingKey { case schemaVersion, state, until, assertionActive, remainingSeconds, pid }
+    enum State: String, Codable { case idle, timed, indefinite, paused }
 
     public var text: String {
         switch self {
         case .idle: "Idle."
         case let .timed(until, _): "Keeping awake until \(MCPControl.rfc3339String(until) ?? "")."
         case .indefinite: "Keeping awake indefinitely."
+        case let .paused(remaining, _): "Paused with \(CompactDurationFormatter.string(remaining: remaining)) remaining."
         }
     }
 
@@ -336,6 +347,17 @@ public enum UpTilLiveStatus: Codable, Equatable, Sendable {
         case let .indefinite(pid):
             try container.encode(State.indefinite, forKey: .state)
             try container.encode(true, forKey: .assertionActive)
+            try container.encode(pid, forKey: .pid)
+        case let .paused(remaining, pid):
+            try container.encode(State.paused, forKey: .state)
+            guard remaining.isFinite, remaining > 0 else {
+                throw EncodingError.invalidValue(
+                    remaining,
+                    .init(codingPath: container.codingPath, debugDescription: "Invalid paused status.")
+                )
+            }
+            try container.encode(false, forKey: .assertionActive)
+            try container.encode(remaining, forKey: .remainingSeconds)
             try container.encode(pid, forKey: .pid)
         }
     }
@@ -383,6 +405,19 @@ public enum UpTilLiveStatus: Codable, Equatable, Sendable {
                 )
             }
             self = .indefinite(pid: pid)
+        case .paused:
+            let remaining = try container.decode(Double.self, forKey: .remainingSeconds)
+            guard
+                !active, remaining.isFinite, remaining > 0,
+                keys == ["schemaVersion", "state", "assertionActive", "remainingSeconds", "pid"]
+            else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .state,
+                    in: container,
+                    debugDescription: "Invalid paused status."
+                )
+            }
+            self = .paused(remaining: remaining, pid: pid)
         }
     }
 }

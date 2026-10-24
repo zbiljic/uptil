@@ -4,19 +4,28 @@ public enum KeepAwakeSession: Equatable, Sendable {
     case idle
     case timed(deadline: Date)
     case indefinite
+    /// A timed session with its countdown frozen. Sleep prevention is released until it resumes.
+    case paused(remaining: TimeInterval)
 
     public var isActive: Bool {
         switch self {
-        case .idle:
+        case .idle, .paused:
             false
         case .timed, .indefinite:
             true
         }
     }
 
+    public var isPaused: Bool {
+        if case .paused = self {
+            return true
+        }
+        return false
+    }
+
     public var deadline: Date? {
         switch self {
-        case .idle, .indefinite:
+        case .idle, .indefinite, .paused:
             nil
         case let .timed(deadline):
             deadline
@@ -29,12 +38,14 @@ public enum KeepAwakeSession: Equatable, Sendable {
             nil
         case let .timed(deadline):
             max(0, deadline.timeIntervalSince(now))
+        case let .paused(remaining):
+            remaining
         }
     }
 
     public func isExpired(at now: Date) -> Bool {
         switch self {
-        case .idle, .indefinite:
+        case .idle, .indefinite, .paused:
             false
         case let .timed(deadline):
             now >= deadline
@@ -76,7 +87,7 @@ public enum KeepAwakeSession: Equatable, Sendable {
         }
 
         switch self {
-        case .idle, .indefinite:
+        case .idle, .indefinite, .paused:
             return false
         case let .timed(deadline):
             self = .timed(deadline: deadline.addingTimeInterval(duration))
@@ -94,7 +105,7 @@ public enum KeepAwakeSession: Equatable, Sendable {
         }
 
         switch self {
-        case .idle, .indefinite:
+        case .idle, .indefinite, .paused:
             return false
         case let .timed(deadline):
             let shortenedDeadline = deadline.addingTimeInterval(-duration)
@@ -114,6 +125,43 @@ public enum KeepAwakeSession: Equatable, Sendable {
         return true
     }
 
+    /// Freezes an unexpired timed session's exact remaining time.
+    @discardableResult
+    public mutating func pause(at now: Date) -> Bool {
+        guard now.timeIntervalSinceReferenceDate.isFinite, case let .timed(deadline) = self else {
+            return false
+        }
+
+        let remaining = deadline.timeIntervalSince(now)
+        guard remaining.isFinite, remaining > 0 else {
+            return false
+        }
+
+        self = .paused(remaining: remaining)
+        return true
+    }
+
+    /// Continues a paused session from its saved remaining time, so the deadline moves later.
+    @discardableResult
+    public mutating func resume(at now: Date) -> Bool {
+        guard
+            now.timeIntervalSinceReferenceDate.isFinite,
+            case let .paused(remaining) = self,
+            remaining.isFinite,
+            remaining > 0
+        else {
+            return false
+        }
+
+        let deadline = now.addingTimeInterval(remaining)
+        guard deadline.timeIntervalSinceReferenceDate.isFinite, deadline > now else {
+            return false
+        }
+
+        self = .timed(deadline: deadline)
+        return true
+    }
+
     @discardableResult
     public mutating func expireIfNeeded(at now: Date) -> Bool {
         guard isExpired(at: now) else {
@@ -126,7 +174,7 @@ public enum KeepAwakeSession: Equatable, Sendable {
 
     @discardableResult
     public mutating func stop() -> Bool {
-        guard isActive else {
+        guard self != .idle else {
             return false
         }
 
