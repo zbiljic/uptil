@@ -71,7 +71,10 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .file(path: "Resources/Info.plist"),
             sources: ["Sources/UpTilApp/**"],
-            resources: ["Resources/Assets.xcassets"],
+            resources: [
+                "Resources/AppIcon.icon",
+                "Resources/Assets.xcassets",
+            ],
             copyFiles: [
                 .wrapper(
                     name: "Embed command-line helper",

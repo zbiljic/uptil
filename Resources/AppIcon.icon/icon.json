@@ -1,0 +1,44 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "srgb:0.14118,0.48235,0.51765,1.00000",
+      "srgb:0.08627,0.34510,0.38431,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "hourglass.svg",
+          "name" : "hourglass"
+        },
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "srgb:0.61176,0.83922,0.85882,1.00000"
+              }
+            }
+          ],
+          "image-name" : "brackets.svg",
+          "name" : "brackets"
+        }
+      ],
+      "name" : "01 Mark",
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : [
+      "macOS"
+    ]
+  }
+}
