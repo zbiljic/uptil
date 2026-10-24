@@ -1,0 +1,80 @@
+#!/bin/bash
+#MISE description="Package the Apple silicon app with its CLI"
+
+set -euo pipefail
+
+version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Expected a numeric major.minor.patch version in Resources/Info.plist" >&2
+    exit 1
+fi
+
+mise run app:generate
+mise exec -- tuist xcodebuild build \
+    -workspace UpTil.xcworkspace \
+    -scheme UpTil \
+    -configuration Release \
+    -destination 'generic/platform=macOS' \
+    -derivedDataPath DerivedData/Release \
+    ARCHS=arm64 ONLY_ACTIVE_ARCH=NO ENABLE_CODE_COVERAGE=NO \
+    CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO
+
+app_path="$PWD/DerivedData/Release/Build/Products/Release/UpTil.app"
+helper_path="$app_path/Contents/Helpers/uptil"
+output_directory="$PWD/dist"
+mkdir -p "$output_directory"
+
+codesign --verify --deep --strict "$app_path"
+for binary in "$app_path/Contents/MacOS/UpTil" "$helper_path"; do
+    codesign --verify --strict "$binary"
+    if [[ "$(xcrun lipo -archs "$binary")" != arm64 ]]; then
+        echo "Release binary must contain only arm64: $binary" >&2
+        exit 1
+    fi
+    load_commands=$(xcrun otool -l "$binary")
+    if [[ "$load_commands" == *'__llvm_prf_'* ]]; then
+        echo "Release binary contains coverage instrumentation: $binary" >&2
+        exit 1
+    fi
+done
+
+codesign --display --entitlements - --xml "$app_path" > DerivedData/Release/entitlements.plist
+codesign --display --entitlements - --xml "$helper_path" > DerivedData/Release/helper-entitlements.plist
+python3 -I - "$app_path" DerivedData/Release/entitlements.plist \
+    DerivedData/Release/helper-entitlements.plist "$version" <<'PY'
+import pathlib
+import plistlib
+import sys
+
+
+def entitlements_at(path):
+    data = pathlib.Path(path).read_bytes()
+    return plistlib.loads(data) if data else {}
+
+
+app = pathlib.Path(sys.argv[1])
+with (app / "Contents/Info.plist").open("rb") as file:
+    info = plistlib.load(file)
+entitlements = entitlements_at(sys.argv[2])
+helper_entitlements = entitlements_at(sys.argv[3])
+assert info["CFBundleShortVersionString"] == sys.argv[4], "Release version mismatch"
+assert info["LSUIElement"] is True, "Release must remain menu-bar-only"
+assert entitlements.get("com.apple.security.app-sandbox") is True, "Sandbox missing"
+assert not entitlements.get("com.apple.security.get-task-allow"), "Debug entitlement present"
+assert not helper_entitlements.get("com.apple.security.get-task-allow"), "Debug entitlement present in CLI"
+# The CLI runs from Terminal and must reach the socket in the app's container.
+assert not helper_entitlements.get("com.apple.security.app-sandbox"), "CLI must not be sandboxed"
+assert not (app / "Contents/embedded.provisionprofile").exists(), "Provisioned build selected"
+PY
+
+archive="UpTil-$version-arm64.zip"
+rm -f "$output_directory/$archive" "$output_directory/$archive.sha256"
+# Leave builder-local metadata (com.apple.provenance) out of the archive.
+ditto -c -k --norsrc --keepParent "$app_path" "$output_directory/$archive"
+/usr/bin/zip -j -q "$output_directory/$archive" LICENSE
+
+cd "$output_directory"
+shasum -a 256 "$archive" > "$archive.sha256"
+
+echo "App and bundled CLI release: $output_directory/$archive"
