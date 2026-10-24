@@ -84,16 +84,15 @@ struct MenuPresentationTests {
         #expect(!timed.quickDurationChoices.map(\.duration).contains(300))
     }
 
-    @Test("indefinite presentation keeps disabled duration actions visible")
+    @Test("indefinite presentation lets quick additions set an end")
     func indefinitePresentationKeepsQuickDurations() {
         let presentation = SessionPresentationState(session: .indefinite)
 
-        #expect(presentation.quickDurationActions == [.extend, .shorten])
+        #expect(presentation.quickDurationActions == [.limit, .shorten])
         #expect(presentation.quickDurationChoices == QuickDurationChoice.allCases)
-        for action in presentation.quickDurationActions {
-            for choice in presentation.quickDurationChoices {
-                #expect(!action.isEnabled(for: choice, session: .indefinite, at: Date()))
-            }
+        for choice in presentation.quickDurationChoices {
+            #expect(QuickDurationAction.limit.isEnabled(for: choice, session: .indefinite, at: Date()))
+            #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: .indefinite, at: Date()))
         }
         #expect(!presentation.canStartUntil)
         #expect(presentation.canStop)
@@ -106,10 +105,8 @@ struct MenuPresentationTests {
         #expect(choices.map(\.title) == ["15m", "30m", "1h", "2h"])
         #expect(QuickDurationAction.start.sign == "+")
         #expect(QuickDurationAction.extend.sign == "+")
+        #expect(QuickDurationAction.limit.sign == "+")
         #expect(QuickDurationAction.shorten.sign == "−")
-        #expect(QuickDurationAction.start.sectionTitle == "Add time")
-        #expect(QuickDurationAction.extend.sectionTitle == "Add time")
-        #expect(QuickDurationAction.shorten.sectionTitle == "Remove time")
     }
 
     @Test("quick duration accessibility labels describe full actions")
@@ -127,6 +124,12 @@ struct MenuPresentationTests {
             "Extend the session by 30 minutes",
             "Extend the session by 1 hour",
             "Extend the session by 2 hours",
+        ])
+        #expect(choices.map { QuickDurationAction.limit.accessibilityLabel(for: $0) } == [
+            "End the session in 15 minutes",
+            "End the session in 30 minutes",
+            "End the session in 1 hour",
+            "End the session in 2 hours",
         ])
         #expect(choices.map { QuickDurationAction.shorten.accessibilityLabel(for: $0) } == [
             "Shorten the session by 15 minutes",
@@ -150,6 +153,9 @@ struct MenuPresentationTests {
         #expect(!QuickDurationAction.extend.isEnabled(for: choice, session: .idle, at: now))
         #expect(!QuickDurationAction.extend.isEnabled(for: choice, session: .indefinite, at: now))
         #expect(QuickDurationAction.extend.isEnabled(for: choice, session: above, at: now))
+        #expect(QuickDurationAction.limit.isEnabled(for: choice, session: .indefinite, at: now))
+        #expect(!QuickDurationAction.limit.isEnabled(for: choice, session: .idle, at: now))
+        #expect(!QuickDurationAction.limit.isEnabled(for: choice, session: above, at: now))
         #expect(QuickDurationAction.shorten.isEnabled(for: choice, session: above, at: now))
         #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: equal, at: now))
         #expect(!QuickDurationAction.shorten.isEnabled(for: choice, session: below, at: now))
@@ -262,14 +268,14 @@ struct MenuPresentationTests {
             calendar: calendar,
             locale: Locale(identifier: "en_GB"),
             timeZone: timeZone
-        ) == "Today, 18:30")
+        ) == "Ends today at 18:30")
         #expect(UntilDeadlineFormatting.string(
             for: tomorrow,
             now: now,
             calendar: calendar,
             locale: Locale(identifier: "en_GB"),
             timeZone: timeZone
-        ) == "Tomorrow, 08:15")
+        ) == "Ends tomorrow at 08:15")
     }
 
     @Test("until preview follows a twelve-hour locale")
@@ -298,7 +304,7 @@ struct MenuPresentationTests {
             timeZone: timeZone
         )
 
-        #expect(preview.hasPrefix("Today, "))
+        #expect(preview.hasPrefix("Ends today at "))
         #expect(preview.contains("6:30"))
         #expect(preview.contains("PM"))
     }
@@ -326,7 +332,7 @@ extension MenuPresentationTests {
             calendar: calendar
         ))
         let fixture = SessionControllerFixture(startDate: beforeNoon, keepsDisplayAwake: false)
-        let control = UntilStartControl(controller: fixture.controller)
+        let control = IdleStartControls(controller: fixture.controller)
 
         let todayPreview = UntilDeadlineFormatting.string(
             for: displayedDeadline,
@@ -335,7 +341,7 @@ extension MenuPresentationTests {
             locale: Locale(identifier: "en_GB"),
             timeZone: timeZone
         )
-        #expect(todayPreview.hasPrefix("Today, "))
+        #expect(todayPreview.hasPrefix("Ends today at "))
 
         fixture.clock.currentDate = afterNoon
         #expect(!control.startUntil(displayedDeadline))
@@ -355,23 +361,43 @@ extension MenuPresentationTests {
             locale: Locale(identifier: "en_GB"),
             timeZone: timeZone
         )
-        #expect(tomorrowPreview.hasPrefix("Tomorrow, "))
+        #expect(tomorrowPreview.hasPrefix("Ends tomorrow at "))
         #expect(control.startUntil(refreshedDeadline))
         #expect(fixture.controller.session == .timed(deadline: refreshedDeadline))
         #expect(fixture.service.activationCount == 1)
         #expect(fixture.scheduler.scheduledDeadlines == [refreshedDeadline])
 
         let freshFixture = SessionControllerFixture(startDate: beforeNoon, keepsDisplayAwake: false)
-        let freshControl = UntilStartControl(controller: freshFixture.controller)
+        let freshControl = IdleStartControls(controller: freshFixture.controller)
         #expect(freshControl.startUntil(displayedDeadline))
         #expect(freshFixture.controller.session == .timed(deadline: displayedDeadline))
         #expect(freshFixture.scheduler.scheduledDeadlines == [displayedDeadline])
 
         let equalFixture = SessionControllerFixture(startDate: displayedDeadline, keepsDisplayAwake: false)
-        #expect(!UntilStartControl(controller: equalFixture.controller).startUntil(displayedDeadline))
+        #expect(!IdleStartControls(controller: equalFixture.controller).startUntil(displayedDeadline))
         #expect(equalFixture.controller.session == .idle)
         #expect(equalFixture.service.activationCount == 0)
         #expect(equalFixture.scheduler.scheduledDeadlines.isEmpty)
+    }
+
+    @Test("a quick addition turns an indefinite session into a timed one")
+    func quickLimitConvertsIndefiniteSession() {
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        let service = FakeKeepAwakeService()
+        let scheduler = ManualExpiryScheduler()
+        let controller = SessionController(
+            keepAwakeService: service,
+            expiryScheduler: scheduler
+        ) { now }
+        controller.startIndefinitely()
+        #expect(QuickDurationAction.limit.perform(choice: .oneHour, controller: controller))
+        #expect(controller.session == .timed(deadline: now.addingTimeInterval(3600)))
+        #expect(SessionPresentationState(session: controller.session).quickDurationActions == [.extend, .shorten])
+        #expect(QuickDurationAction.extend.perform(choice: .fifteenMinutes, controller: controller))
+        #expect(controller.session == .timed(deadline: now.addingTimeInterval(4500)))
+        #expect(service.activationCount == 1)
+        #expect(service.deactivationCount == 0)
+        #expect(scheduler.scheduledDeadlines == [now.addingTimeInterval(3600), now.addingTimeInterval(4500)])
     }
 
     @Test("quit shuts down before invoking termination")

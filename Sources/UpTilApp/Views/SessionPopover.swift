@@ -68,20 +68,13 @@ enum QuickDurationChoice: CaseIterable, Equatable, Identifiable {
 enum QuickDurationAction: Hashable {
     case start
     case extend
+    /// Turns an indefinite session into a timed one that ends after the chosen duration.
+    case limit
     case shorten
-
-    var sectionTitle: String {
-        switch self {
-        case .start, .extend:
-            "Add time"
-        case .shorten:
-            "Remove time"
-        }
-    }
 
     var sign: String {
         switch self {
-        case .start, .extend: "+"
+        case .start, .extend, .limit: "+"
         case .shorten: "−"
         }
     }
@@ -92,6 +85,8 @@ enum QuickDurationAction: Hashable {
             "Start a \(choice.sessionDurationDescription) session"
         case .extend:
             "Extend the session by \(choice.durationDescription)"
+        case .limit:
+            "End the session in \(choice.durationDescription)"
         case .shorten:
             "Shorten the session by \(choice.durationDescription)"
         }
@@ -107,6 +102,8 @@ enum QuickDurationAction: Hashable {
             session == .idle
         case .extend:
             session.deadline != nil
+        case .limit:
+            session == .indefinite
         case .shorten:
             session.canShorten(by: choice.duration, at: date)
         }
@@ -116,7 +113,7 @@ enum QuickDurationAction: Hashable {
     @MainActor
     func perform(choice: QuickDurationChoice, controller: SessionController) -> Bool {
         switch self {
-        case .start:
+        case .start, .limit:
             controller.start(for: choice.duration)
         case .extend:
             controller.extend(by: choice.duration)
@@ -146,8 +143,10 @@ enum SessionPresentationState: Equatable {
         switch self {
         case .idle:
             [.start, .shorten]
-        case .timed, .indefinite:
+        case .timed:
             [.extend, .shorten]
+        case .indefinite:
+            [.limit, .shorten]
         }
     }
 
@@ -184,6 +183,17 @@ enum DisplayAwakeTogglePresentation {
     }
 }
 
+/// Fixed geometry shared by every popover state, so nothing moves under the pointer
+/// when a click changes the session.
+enum SessionPopoverLayout {
+    static let width: CGFloat = 300
+    static let heroHeight: CGFloat = 64
+    static let heroSpacing: CGFloat = 10
+    static let sessionRowHeight: CGFloat = 22
+    static let headerHeight = heroHeight + heroSpacing + sessionRowHeight
+    static let heroFont = Font.system(size: 32, weight: .light).monospacedDigit()
+}
+
 struct SessionPopover: View {
     @Bindable var controller: SessionController
 
@@ -192,129 +202,61 @@ struct SessionPopover: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(AppMetadata.displayName)
-                .font(.headline)
+        VStack(spacing: 14) {
+            sessionHeader
+                .frame(height: SessionPopoverLayout.headerHeight)
 
-            statusContent
-
-            displayAwakeToggle
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(spacing: 8) {
                 ForEach(presentationState.quickDurationActions, id: \.self) { action in
                     quickDurationSection(action: action)
                 }
-
-                Spacer(minLength: 0)
-
-                switch presentationState {
-                case .idle:
-                    idleSecondaryControls
-                case .timed, .indefinite:
-                    stopControl
-                }
             }
-            .frame(height: 224, alignment: .topLeading)
 
-            Divider()
-
-            Button("Quit UpTil", role: .destructive) {
-                AppQuitAction.perform(controller: controller) {
-                    NSApplication.shared.terminate(nil)
-                }
+            VStack(spacing: 10) {
+                Divider()
+                footer
             }
-            .keyboardShortcut("q")
-            .accessibilityLabel("Quit UpTil")
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: SessionPopoverLayout.width)
         .transaction { $0.animation = nil }
     }
 
-    private var displayAwakeToggle: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Toggle(isOn: Binding(
-                get: {
-                    controller.keepsDisplayAwake
-                },
-                set: { enabled in
-                    DisplayAwakeTogglePresentation.perform(
-                        isEnabled: enabled,
-                        controller: controller
-                    )
+    /// Every state fills the same two slots: a hero above one control row. While idle,
+    /// Stop's slot holds only preview text, so a repeated click on Stop can never land
+    /// on a control that starts a session.
+    @ViewBuilder private var sessionHeader: some View {
+        switch presentationState {
+        case .idle:
+            IdleStartControls(controller: controller)
+        case .timed, .indefinite:
+            VStack(spacing: SessionPopoverLayout.heroSpacing) {
+                activeHero
+                    .frame(maxWidth: .infinity)
+                    .frame(height: SessionPopoverLayout.heroHeight)
+
+                Button("Stop", systemImage: "stop.fill", role: .destructive) {
+                    controller.stop()
                 }
-            )) {
-                Label(DisplayAwakeTogglePresentation.label, systemImage: "display")
-            }
-            .toggleStyle(.switch)
-            .accessibilityLabel("Keep display awake")
-            .accessibilityHint(DisplayAwakeTogglePresentation.accessibilityHint)
-
-            Text(DisplayAwakeTogglePresentation.description)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var statusContent: some View {
-        Group {
-            switch presentationState {
-            case .idle:
-                idleStatus
-            case .timed:
-                timedStatus
-            case .indefinite:
-                indefiniteStatus
+                .accessibilityLabel("Stop the active session")
+                .frame(height: SessionPopoverLayout.sessionRowHeight)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 54, alignment: .topLeading)
     }
 
-    private var idleStatus: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("No active session")
-                .font(.title2)
-
-            Text("Choose a duration to stay awake")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder private var timedStatus: some View {
+    @ViewBuilder private var activeHero: some View {
         if let deadline = controller.session.deadline {
-            TimelineView(.everyMinute) { context in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(timerInterval: min(context.date, deadline) ... deadline, showsHours: true)
-                            .font(.title2)
-                            .monospacedDigit()
-                            .lineLimit(1)
-                            .frame(width: 100, alignment: .leading)
-                        Text("remaining")
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityElement(children: .combine)
-
-                    Text("Until \(EndTimeFormatting.string(for: deadline, now: context.date))")
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .accessibilityLabel(
-                            "Session ends \(EndTimeFormatting.string(for: deadline, now: context.date))"
-                        )
-                }
+            CountdownHero(deadline: deadline)
+        } else {
+            VStack(spacing: 0) {
+                Image(systemName: "infinity")
+                    .font(SessionPopoverLayout.heroFont)
+                    .accessibilityHidden(true)
+                Text("No time limit · + sets one")
+                    .foregroundStyle(.secondary)
             }
-        }
-    }
-
-    private var indefiniteStatus: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Label("Awake until stopped", systemImage: "infinity")
-                .font(.title2)
-            Text("Stop the session to allow sleep")
-                .foregroundStyle(.secondary)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Awake until stopped. Add time to set an end.")
         }
     }
 
@@ -330,57 +272,79 @@ struct SessionPopover: View {
     }
 
     private func quickDurationControls(action: QuickDurationAction, at date: Date) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(action.sectionTitle)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                ForEach(presentationState.quickDurationChoices) { choice in
-                    let isEnabled = action.isEnabled(for: choice, session: controller.session, at: date)
-                    Button {
-                        action.perform(choice: choice, controller: controller)
-                    } label: {
-                        HStack(spacing: 0) {
-                            Text(action.sign)
-                                .frame(width: 8)
-                            Text(choice.title)
-                                .monospacedDigit()
-                        }
-                        .frame(maxWidth: .infinity)
-                        .foregroundStyle(isEnabled ? (action == .shorten ? .secondary : .primary) : .tertiary)
+        HStack(spacing: 8) {
+            ForEach(presentationState.quickDurationChoices) { choice in
+                let isEnabled = action.isEnabled(for: choice, session: controller.session, at: date)
+                Button {
+                    action.perform(choice: choice, controller: controller)
+                } label: {
+                    HStack(spacing: 0) {
+                        Text(action.sign)
+                            .frame(width: 8)
+                        Text(choice.title)
+                            .monospacedDigit()
                     }
-                    .accessibilityLabel(action.accessibilityLabel(for: choice))
-                    .disabled(!isEnabled)
+                    .frame(maxWidth: .infinity)
+                    .foregroundStyle(isEnabled ? (action == .shorten ? .secondary : .primary) : .tertiary)
+                }
+                .accessibilityLabel(action.accessibilityLabel(for: choice))
+                .disabled(!isEnabled)
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            displayAwakeToggle
+
+            Spacer(minLength: 0)
+
+            Button {
+                AppQuitAction.perform(controller: controller) {
+                    NSApplication.shared.terminate(nil)
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Text("Quit")
+                    Text("⌘Q")
+                        .foregroundStyle(.tertiary)
                 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .keyboardShortcut("q")
+            .accessibilityLabel("Quit UpTil")
         }
+        .font(.callout)
     }
 
-    private var idleSecondaryControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            UntilStartControl(controller: controller)
-
-            Button("Indefinitely", systemImage: "infinity") {
-                controller.startIndefinitely()
+    private var displayAwakeToggle: some View {
+        Toggle(isOn: Binding(
+            get: {
+                controller.keepsDisplayAwake
+            },
+            set: { enabled in
+                DisplayAwakeTogglePresentation.perform(
+                    isEnabled: enabled,
+                    controller: controller
+                )
             }
-            .accessibilityLabel("Start an indefinite session")
+        )) {
+            Label(DisplayAwakeTogglePresentation.label, systemImage: DisplayAwakeTogglePresentation.systemImage)
         }
-    }
-
-    @ViewBuilder private var stopControl: some View {
-        if presentationState.canStop {
-            Button("Stop", systemImage: "stop.fill", role: .destructive) {
-                controller.stop()
-            }
-            .accessibilityLabel("Stop the active session")
-        }
+        .toggleStyle(.switch)
+        .controlSize(.mini)
+        .help(DisplayAwakeTogglePresentation.description)
+        .accessibilityLabel("Keep display awake")
+        .accessibilityHint(DisplayAwakeTogglePresentation.accessibilityHint)
     }
 }
 
-struct UntilStartControl: View {
+/// The idle header: the start options other than a quick duration. The preview shares
+/// the Start button's resolved deadline and sits in the slot Stop takes once a session runs.
+struct IdleStartControls: View {
     @Bindable var controller: SessionController
     @State private var selectedTime = Date().addingTimeInterval(60 * 60)
 
@@ -393,34 +357,49 @@ struct UntilStartControl: View {
                 calendar: .current
             )
 
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Label("Until", systemImage: "clock")
-                        .font(.subheadline)
+            VStack(spacing: SessionPopoverLayout.heroSpacing) {
+                VStack(spacing: 6) {
+                    Text("Not keeping awake")
+                        .font(.title2)
 
-                    DatePicker(
-                        "Choose session end time",
-                        selection: $selectedTime,
-                        displayedComponents: .hourAndMinute
-                    )
-                    .labelsHidden()
-                    .accessibilityLabel("Choose session end time")
+                    HStack(spacing: 8) {
+                        Label("Until", systemImage: "clock")
+                            .font(.subheadline)
 
-                    Spacer(minLength: 0)
+                        DatePicker(
+                            "Choose session end time",
+                            selection: $selectedTime,
+                            displayedComponents: .hourAndMinute
+                        )
+                        .labelsHidden()
+                        .accessibilityLabel("Choose session end time")
 
-                    Button("Start") {
-                        if let deadline {
-                            _ = startUntil(deadline)
+                        Button("Start") {
+                            if let deadline {
+                                _ = startUntil(deadline)
+                            }
                         }
+                        .disabled(deadline == nil)
+                        .accessibilityLabel("Start session until selected time")
+
+                        Button {
+                            controller.startIndefinitely()
+                        } label: {
+                            Image(systemName: "infinity")
+                                .accessibilityHidden(true)
+                        }
+                        .help("Stay awake until stopped")
+                        .accessibilityLabel("Start an indefinite session")
                     }
-                    .disabled(deadline == nil)
-                    .accessibilityLabel("Start session until selected time")
                 }
+                .frame(height: SessionPopoverLayout.heroHeight)
 
                 Text(deadline.map { UntilDeadlineFormatting.string(for: $0, now: now) } ?? "Invalid end time")
                     .font(.caption)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .frame(height: SessionPopoverLayout.sessionRowHeight)
             }
         }
     }

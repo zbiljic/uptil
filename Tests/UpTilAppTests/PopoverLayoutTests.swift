@@ -21,17 +21,11 @@ struct PopoverLayoutTests {
         window.contentView = host
         defer { window.close() }
         var sizes: [NSSize] = []
-        for state in ["idle", "timed", "extended", "display", "under-minute", "tick", "indefinite", "stopped"] {
-            switch state {
-            case "timed": controller.start(for: 15 * 60)
-            case "extended": controller.extend(by: 75 * 60)
-            case "display": controller.setKeepsDisplayAwake(true)
-            case "under-minute": controller.start(for: 45)
-            case "tick": try await Task.sleep(for: .milliseconds(1200))
-            case "indefinite": controller.startIndefinitely()
-            case "stopped": controller.stop()
-            default: break
-            }
+        for state in [
+            "idle", "timed", "extended", "display", "under-minute", "tick",
+            "indefinite", "limited", "over-ten-hours", "stopped",
+        ] {
+            try await enter(state, controller: controller)
             host.layoutSubtreeIfNeeded()
             let size = host.fittingSize
             host.setFrameSize(size)
@@ -43,6 +37,21 @@ struct PopoverLayoutTests {
         let baselineSize = try #require(sizes.first)
         #expect(baselineSize.width == 300)
         #expect(sizes.allSatisfy { $0 == baselineSize })
+    }
+
+    private func enter(_ state: String, controller: SessionController) async throws {
+        switch state {
+        case "timed": controller.start(for: 15 * 60)
+        case "extended": controller.extend(by: 75 * 60)
+        case "display": controller.setKeepsDisplayAwake(true)
+        case "under-minute": controller.start(for: 45)
+        case "tick": try await Task.sleep(for: .milliseconds(1200))
+        case "indefinite": controller.startIndefinitely()
+        case "limited": QuickDurationAction.limit.perform(choice: .oneHour, controller: controller)
+        case "over-ten-hours": controller.extend(by: 10 * 3600)
+        case "stopped": controller.stop()
+        default: break
+        }
     }
 
     private func render(_ host: NSView, name: String) async throws {
