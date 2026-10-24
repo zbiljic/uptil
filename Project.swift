@@ -6,6 +6,11 @@ let sharedSettings: Settings = .settings(
         "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
         "SWIFT_STRICT_CONCURRENCY": "complete",
         "SWIFT_VERSION": "6.3",
+    ],
+    configurations: [
+        .debug(name: .debug),
+        // Keep test coverage instrumentation out of shipped builds.
+        .release(name: .release, settings: ["ENABLE_CODE_COVERAGE": "NO"]),
     ]
 )
 
