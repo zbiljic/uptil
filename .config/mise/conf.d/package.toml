@@ -1,0 +1,3 @@
+[tasks."package:clean"]
+description = "Remove packaged release artifacts"
+run = "rm -rf dist"
