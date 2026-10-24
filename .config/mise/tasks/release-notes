@@ -1,0 +1,9 @@
+#!/bin/bash
+#MISE description="Update a GitHub release description from a reviewed Markdown file"
+#USAGE arg "<tag>" help="Release tag, such as v0.2.0"
+#USAGE arg "<notes>" help="Markdown file containing the complete release description"
+
+set -euo pipefail
+
+[[ -f "${usage_notes:?}" && -s "$usage_notes" ]] || exit 1
+gh release edit --notes-file="$usage_notes" -- "${usage_tag:?}"
