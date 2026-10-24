@@ -170,8 +170,8 @@ struct MCPCommandHandlerTests {
         #expect(numeric.error?.code == -32601)
         #expect(fixture.raw(method: "tools/list", id: nil) == nil)
         #expect(fixture.notification(tool: "uptil.indefinite") == nil)
-        for invalidID: JSONValue in [.bool(true), .array([]), .object([:]), .null] {
-            let response = try fixture.response(method: "tools/call", id: invalidID, tool: "uptil.indefinite")
+        for rawID in ["1.5", "9223372036854775808", "true", "[]", "{}", "null"] {
+            let response = try fixture.response(method: "tools/call", rawID: rawID, tool: "uptil.indefinite")
             #expect(response.id == nil)
             #expect(response.error?.code == -32600)
         }
@@ -183,6 +183,19 @@ struct MCPCommandHandlerTests {
         #expect(try MCPControl.decoder().decode(MCPResponse.self, from: malformed ?? Data()).error?.code == -32700)
         let primitive = fixture.handler.response(for: Data("1".utf8))
         #expect(try MCPControl.decoder().decode(MCPResponse.self, from: primitive ?? Data()).error?.code == -32600)
+    }
+
+    @Test("integer IDs beyond Double precision echo exactly")
+    func exactIntegerIDs() throws {
+        let fixture = Fixture()
+        let discovery = try fixture.response(method: "server/discover", rawID: "9007199254740993")
+        #expect(discovery.id == .number(9_007_199_254_740_993))
+        #expect(discovery.error == nil)
+        let unknown = try fixture.response(method: "missing", rawID: "9007199254740993")
+        #expect(unknown.id == .number(9_007_199_254_740_993))
+        #expect(unknown.error?.code == -32601)
+        #expect(try fixture.tool("uptil.start", arguments: ["durationSeconds": .number(1.5)]).isError == false)
+        #expect(fixture.controller.session == .timed(deadline: fixture.date.addingTimeInterval(1.5)))
     }
 
     @Test("status uses one clock snapshot for refresh and rendering")
@@ -250,7 +263,7 @@ private final class Fixture {
 
     func response(
         method: String,
-        id: JSONValue? = .string("id"),
+        id: MCPRequestID? = .string("id"),
         tool: String? = nil,
         arguments: [String: JSONValue] = [:],
         argumentsValue: JSONValue? = nil,
@@ -275,7 +288,28 @@ private final class Fixture {
         return response
     }
 
-    func raw(method: String, id: JSONValue?, params: [String: JSONValue] = [:]) -> Data? {
+    /// Splices `rawID` into the request text unchanged, so the codec sees the ID exactly as a client wrote it.
+    func response(method: String, rawID: String, tool: String? = nil) throws -> MCPResponse {
+        var params: [String: JSONValue] = [
+            "_meta": .object(makeMetadata(includeClientInfo: true, version: MCPControl.protocolVersion)),
+        ]
+        if let tool {
+            params["name"] = .string(tool)
+            params["arguments"] = .object([:])
+        }
+        let paramsData = try MCPControl.encoder().encode(JSONValue.object(params))
+        guard
+            let encodedParams = String(bytes: paramsData, encoding: .utf8),
+            let data = handler.response(for: Data(
+                "{\"jsonrpc\":\"2.0\",\"id\":\(rawID),\"method\":\"\(method)\",\"params\":\(encodedParams)}".utf8
+            ))
+        else {
+            throw NSError(domain: "test", code: 3)
+        }
+        return try MCPControl.decoder().decode(MCPResponse.self, from: data)
+    }
+
+    func raw(method: String, id: MCPRequestID?, params: [String: JSONValue] = [:]) -> Data? {
         handler.response(for: (try? MCPControl.encoder().encode(MCPRequest(
             id: id,
             method: method,

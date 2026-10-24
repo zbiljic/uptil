@@ -28,10 +28,42 @@ struct MCPControlTests {
         #expect(numericRoundTrip.id == .number(7))
         #expect(numericRoundTrip.hasValidID)
         #expect(request.hasValidID)
-        #expect(!MCPRequest(id: .null, method: "tools/list").hasValidID)
-        #expect(!MCPRequest(id: .bool(true), method: "tools/list").hasValidID)
-        #expect(!MCPRequest(id: .array([]), method: "tools/list").hasValidID)
-        #expect(!MCPRequest(id: .object([:]), method: "tools/list").hasValidID)
+        for rawID in ["null", "true", "[]", "{}", "1.5", "9223372036854775808", "-9223372036854775809"] {
+            let invalid = try MCPControl.decoder().decode(
+                MCPRequest.self,
+                from: Data("{\"jsonrpc\":\"2.0\",\"id\":\(rawID),\"method\":\"tools/list\"}".utf8)
+            )
+            #expect(invalid.hasID)
+            #expect(!invalid.isNotification)
+            #expect(!invalid.hasValidID)
+        }
+    }
+
+    @Test("integer IDs beyond Double precision echo exactly")
+    func exactIntegerIDs() throws {
+        let cases: [(raw: String, id: MCPRequestID)] = [
+            ("9007199254740993", .number(9_007_199_254_740_993)),
+            ("9223372036854775807", .number(Int64.max)),
+            ("-9223372036854775808", .number(Int64.min)),
+            ("\"id-2\"", .string("id-2")),
+        ]
+        for (raw, id) in cases {
+            let request = try MCPControl.decoder().decode(
+                MCPRequest.self,
+                from: Data("{\"jsonrpc\":\"2.0\",\"id\":\(raw),\"method\":\"tools/list\"}".utf8)
+            )
+            #expect(request.id == id)
+            #expect(request.hasValidID)
+            for response in [
+                MCPResponse(id: request.id, result: .object([:])),
+                MCPResponse(id: request.id, error: MCPError(code: -32601, message: "Method not found")),
+            ] {
+                let encoded = try MCPControl.encoder().encode(response)
+                let text = try #require(String(bytes: encoded, encoding: .utf8))
+                #expect(text.contains("\"id\":\(raw),"))
+                #expect(try MCPControl.decoder().decode(MCPResponse.self, from: encoded).id == id)
+            }
+        }
     }
 
     @Test("response requires exactly one result or error")
@@ -53,6 +85,14 @@ struct MCPControlTests {
         }
         #expect(throws: Error.self) {
             try MCPControl.decoder().decode(MCPResponse.self, from: Data("{\"jsonrpc\":\"2.0\",\"id\":1}".utf8))
+        }
+        for rawID in ["true", "1.5", "[]", "{}"] {
+            #expect(throws: Error.self) {
+                try MCPControl.decoder().decode(
+                    MCPResponse.self,
+                    from: Data("{\"jsonrpc\":\"2.0\",\"id\":\(rawID),\"result\":{}}".utf8)
+                )
+            }
         }
     }
 

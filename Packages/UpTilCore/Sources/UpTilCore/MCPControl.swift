@@ -79,14 +79,38 @@ public enum MCPControl {
     }
 }
 
+/// A JSON-RPC request ID. Integers decode straight into `Int64`, never through `Double`,
+/// so every accepted ID echoes back exactly; fractional and out-of-range numbers are rejected.
+public enum MCPRequestID: Codable, Hashable, Sendable {
+    case string(String)
+    case number(Int64)
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let value = try? container.decode(Int64.self) {
+            self = .number(value)
+        } else {
+            self = try .string(container.decode(String.self))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .string(value): try container.encode(value)
+        case let .number(value): try container.encode(value)
+        }
+    }
+}
+
 public struct MCPRequest: Codable, Equatable, Sendable {
     public let jsonrpc: String
-    public let id: JSONValue?
+    public let id: MCPRequestID?
     public let hasID: Bool
     public let method: String
     public let params: JSONValue?
 
-    public init(id: JSONValue?, method: String, params: JSONValue? = nil) {
+    public init(id: MCPRequestID?, method: String, params: JSONValue? = nil) {
         jsonrpc = "2.0"
         self.id = id
         hasID = id != nil
@@ -100,7 +124,8 @@ public struct MCPRequest: Codable, Equatable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
         hasID = container.contains(.id)
-        id = try container.decodeIfPresent(JSONValue.self, forKey: .id)
+        // A present but null or malformed ID stays invalid rather than turning the request into a notification.
+        id = try? container.decodeIfPresent(MCPRequestID.self, forKey: .id)
         method = try container.decode(String.self, forKey: .method)
         params = try container.decodeIfPresent(JSONValue.self, forKey: .params)
     }
@@ -120,13 +145,7 @@ public struct MCPRequest: Codable, Equatable, Sendable {
     }
 
     public var hasValidID: Bool {
-        guard hasID else { return true }
-        return switch id {
-        case .string, .number:
-            true
-        case .none, .null, .bool, .array, .object:
-            false
-        }
+        !hasID || id != nil
     }
 }
 
@@ -144,18 +163,18 @@ public struct MCPError: Codable, Equatable, Sendable {
 
 public struct MCPResponse: Codable, Equatable, Sendable {
     public let jsonrpc: String
-    public let id: JSONValue?
+    public let id: MCPRequestID?
     public let result: JSONValue?
     public let error: MCPError?
 
-    public init(id: JSONValue?, result: JSONValue) {
+    public init(id: MCPRequestID?, result: JSONValue) {
         jsonrpc = "2.0"
         self.id = id
         self.result = result
         error = nil
     }
 
-    public init(id: JSONValue?, error: MCPError) {
+    public init(id: MCPRequestID?, error: MCPError) {
         jsonrpc = "2.0"
         self.id = id
         result = nil
@@ -167,7 +186,7 @@ public struct MCPResponse: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         jsonrpc = try container.decode(String.self, forKey: .jsonrpc)
-        id = try container.decodeIfPresent(JSONValue.self, forKey: .id)
+        id = try container.decodeIfPresent(MCPRequestID.self, forKey: .id)
         let hasResult = container.contains(.result)
         let hasError = container.contains(.error)
         guard hasResult != hasError else {

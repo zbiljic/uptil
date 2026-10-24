@@ -27,7 +27,7 @@ struct MCPStdioBridge {
         return 0
     }
 
-    private func writeError(id: JSONValue?, code: Int, message: String) {
+    private func writeError(id: MCPRequestID?, code: Int, message: String) {
         guard
             let data = try? MCPControl.encoder().encode(MCPResponse(
                 id: id,
