@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Package and draft release
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate release tag
+        shell: bash
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ || "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Release tag must be v$version, matching Resources/Info.plist"
+            exit 1
+          fi
+
+      - name: Select Xcode 26.6
+        run: sudo xcode-select --switch /Applications/Xcode_26.6.app/Contents/Developer
+
+      - name: Install development tools
+        uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      - name: Package app and bundled CLI
+        run: mise run package
+
+      - name: Create draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          archive="dist/UpTil-${GITHUB_REF_NAME#v}-arm64.zip"
+          cat > "$RUNNER_TEMP/release-notes.md" <<'EOF'
+          macOS app and bundled `uptil` CLI for Apple silicon Macs; requires macOS 14 or later.
+
+          This build is ad hoc signed and not notarized. If you trust this release and macOS blocks it, try opening UpTil, then use System Settings → Privacy & Security → Open Anyway.
+
+          UpTil runs in the menu bar and has no Dock icon.
+          EOF
+          gh release create "$GITHUB_REF_NAME" "$archive" "$archive.sha256" \
+            --verify-tag \
+            --draft \
+            --title "UpTil $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
