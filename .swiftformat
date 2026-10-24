@@ -24,4 +24,4 @@
 --disable modifierOrder,swiftTestingTestCaseNames
 
 # Generated and third-party content
---exclude Derived,.build,.swiftpm,Tuist/Dependencies,*.xcodeproj,*.xcworkspace
+--exclude Derived,DerivedData,.build,.swiftpm,Tuist/Dependencies,*.xcodeproj,*.xcworkspace
