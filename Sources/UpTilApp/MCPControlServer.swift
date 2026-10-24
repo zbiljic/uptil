@@ -10,6 +10,8 @@ final class MCPControlServer {
         let owner: uid_t
     }
 
+    nonisolated private static let requestReceiveBudget = Duration.seconds(5)
+
     private let handler: MCPCommandHandler
     private var listener: Int32 = -1
     private var socketURL: URL?
@@ -184,7 +186,7 @@ final class MCPControlServer {
         }
     }
 
-    nonisolated private static func connectSocket(_ descriptor: Int32, path: String) -> Int32 {
+    nonisolated static func connectSocket(_ descriptor: Int32, path: String) -> Int32 {
         var address = sockaddr_un()
         address.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
         address.sun_family = sa_family_t(AF_UNIX)
@@ -198,10 +200,15 @@ final class MCPControlServer {
         }
     }
 
+    /// Reads one framed request within a single receive budget that partial input cannot renew.
+    /// Connections are still served one at a time, so a queued request can wait up to one budget
+    /// per connection ahead of it.
     nonisolated private static func readLine(_ descriptor: Int32) -> Data? {
+        let deadline = ContinuousClock.now + requestReceiveBudget
         var data = Data()
         var byte: UInt8 = 0
         while data.count <= MCPFraming.maximumLineBytes {
+            guard waitForInput(descriptor, until: deadline) else { return nil }
             let count = read(descriptor, &byte, 1)
             if count < 0, errno == EINTR {
                 continue
@@ -213,6 +220,27 @@ final class MCPControlServer {
             }
         }
         return nil
+    }
+
+    /// Waits until the descriptor is readable or hung up, retrying interrupted polls against the same deadline.
+    nonisolated private static func waitForInput(_ descriptor: Int32, until deadline: ContinuousClock.Instant) -> Bool {
+        while true {
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else { return false }
+            var request = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&request, 1, pollTimeout(remaining))
+            if ready < 0, errno == EINTR {
+                continue
+            }
+            guard ready > 0 else { return false }
+            return request.revents & Int16(POLLERR | POLLNVAL) == 0
+        }
+    }
+
+    nonisolated private static func pollTimeout(_ remaining: Duration) -> Int32 {
+        let (seconds, attoseconds) = min(remaining, requestReceiveBudget).components
+        let attosecondsPerMillisecond: Int64 = 1_000_000_000_000_000
+        return Int32(seconds * 1000 + (attoseconds + attosecondsPerMillisecond - 1) / attosecondsPerMillisecond)
     }
 
     nonisolated private static func writeAll(_ descriptor: Int32, _ data: Data) -> Bool {

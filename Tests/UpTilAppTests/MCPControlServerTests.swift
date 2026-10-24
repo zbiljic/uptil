@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Testing
 @testable import UpTil
+import UpTilCore
 
 @MainActor
 @Suite("MCP control server")
@@ -156,9 +157,38 @@ struct MCPControlServerTests {
         #expect(try String(contentsOf: path, encoding: .utf8) == "replacement")
     }
 
-    private func makeServer() -> MCPControlServer {
+    @Test("a trickling partial request cannot hold the server past one receive budget")
+    func partialRequestReceiveBudget() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = root.appending(path: "server.sock")
+        let service = FakeKeepAwakeService()
+        let server = makeServer(service: service)
+        server.start(at: path)
+        defer { server.stop() }
+
+        let partialStarted = DispatchSemaphore(value: 0)
+        let stopTrickle = DispatchSemaphore(value: 0)
+        async let trickled = SocketTestClient.run {
+            SocketTestClient.trickle(to: path.path, started: partialStarted, stop: stopTrickle)
+        }
+        let reply = await SocketTestClient.run {
+            SocketTestClient.discover(at: path.path, after: partialStarted)
+        }
+        stopTrickle.signal()
+        #expect(await trickled)
+
+        let (line, elapsed) = try #require(reply)
+        #expect(elapsed < .seconds(7))
+        let response = try MCPControl.decoder().decode(MCPResponse.self, from: line)
+        #expect(response.id == .string("after-partial"))
+        #expect(response.error == nil)
+        #expect(service.activationCount == 0)
+    }
+
+    private func makeServer(service: FakeKeepAwakeService = FakeKeepAwakeService()) -> MCPControlServer {
         let controller = SessionController(
-            keepAwakeService: FakeKeepAwakeService(),
+            keepAwakeService: service,
             expiryScheduler: ManualExpiryScheduler()
         )
         return MCPControlServer(handler: MCPCommandHandler(controller: controller))
@@ -185,5 +215,84 @@ struct MCPControlServerTests {
         #expect(MCPControlServer.bindSocket(descriptor, path: path.path) == 0)
         close(descriptor)
         #expect(chmod(path.path, permissions) == 0)
+    }
+}
+
+/// Blocking clients that run off the main actor so it stays free to serve requests.
+/// Each call owns its descriptor and closes it before returning.
+nonisolated private enum SocketTestClient {
+    static let queue = DispatchQueue(label: "uptil.tests.socket-client", attributes: .concurrent)
+
+    static func run<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: work()) }
+        }
+    }
+
+    /// Starts a mutating request, then sends one more byte per second without ever finishing the line.
+    static func trickle(to path: String, started: DispatchSemaphore, stop: DispatchSemaphore) -> Bool {
+        guard let descriptor = connect(to: path) else {
+            started.signal()
+            return false
+        }
+        defer { close(descriptor) }
+        let prefix = "{\"jsonrpc\":\"2.0\",\"id\":\"partial\",\"method\":\"tools/call\"," +
+            "\"params\":{\"name\":\"uptil.indefinite\","
+        let sent = send(Data(prefix.utf8), to: descriptor)
+        started.signal()
+        guard sent else { return false }
+        let giveUp = ContinuousClock.now + .seconds(12)
+        while ContinuousClock.now < giveUp, stop.wait(timeout: .now() + 1) == .timedOut {
+            guard send(Data(" ".utf8), to: descriptor) else { break }
+        }
+        return true
+    }
+
+    static func discover(at path: String, after partialStarted: DispatchSemaphore) -> (line: Data, elapsed: Duration)? {
+        guard partialStarted.wait(timeout: .now() + 2) == .success else { return nil }
+        let start = ContinuousClock.now
+        guard let descriptor = connect(to: path, receiveTimeout: 8) else { return nil }
+        defer { close(descriptor) }
+        let request = MCPRequest(id: .string("after-partial"), method: "server/discover", params: .object([
+            "_meta": .object([
+                "io.modelcontextprotocol/protocolVersion": .string(MCPControl.protocolVersion),
+                "io.modelcontextprotocol/clientCapabilities": .object([:]),
+            ]),
+        ]))
+        guard
+            let line = try? MCPFraming.line(for: MCPControl.encoder().encode(request)),
+            send(line, to: descriptor)
+        else { return nil }
+        var response = Data()
+        var byte: UInt8 = 0
+        while read(descriptor, &byte, 1) == 1 {
+            if byte == 0x0A {
+                return (response, start.duration(to: .now))
+            }
+            response.append(byte)
+        }
+        return nil
+    }
+
+    private static func connect(to path: String, receiveTimeout seconds: Int = 5) -> Int32? {
+        let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return nil }
+        var timeout = timeval(tv_sec: seconds, tv_usec: 0)
+        guard
+            MCPControlServer.configureSocket(descriptor),
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0,
+            MCPControlServer.connectSocket(descriptor, path: path) == 0
+        else {
+            close(descriptor)
+            return nil
+        }
+        return descriptor
+    }
+
+    private static func send(_ data: Data, to descriptor: Int32) -> Bool {
+        data.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return false }
+            return write(descriptor, base, bytes.count) == bytes.count
+        }
     }
 }
