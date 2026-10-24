@@ -64,3 +64,6 @@ DerivedData/
 graph.dot
 Tuist/Dependencies/
 *.xcworkspace
+
+# Directories
+**/dist
