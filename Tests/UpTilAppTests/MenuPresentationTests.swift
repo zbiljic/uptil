@@ -268,14 +268,14 @@ struct MenuPresentationTests {
             calendar: calendar,
             locale: Locale(identifier: "en_GB"),
             timeZone: timeZone
-        ) == "Ends today at 18:30")
+        ) == "Ends today at 18:30 · 8h 30m")
         #expect(UntilDeadlineFormatting.string(
             for: tomorrow,
             now: now,
             calendar: calendar,
             locale: Locale(identifier: "en_GB"),
             timeZone: timeZone
-        ) == "Ends tomorrow at 08:15")
+        ) == "Ends tomorrow at 08:15 · 22h 15m")
     }
 
     @Test("until preview follows a twelve-hour locale")

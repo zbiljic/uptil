@@ -382,18 +382,15 @@ struct SessionPopover: View {
 
 /// The idle header: the start options other than a quick duration. The preview shares
 /// the Start button's resolved deadline and sits in the slot Stop takes once a session runs.
+/// The picker suggests an end that follows the clock until the user picks one.
 struct IdleStartControls: View {
     @Bindable var controller: SessionController
-    @State private var selectedTime = Date().addingTimeInterval(60 * 60)
+    @State private var selection = UntilSelection()
 
     var body: some View {
         TimelineView(.everyMinute) { _ in
             let now = Date()
-            let deadline = WallClockDeadline.nextOccurrence(
-                of: selectedTime,
-                after: now,
-                calendar: .current
-            )
+            let deadline = selection.deadline(at: now, calendar: .current)
 
             VStack(spacing: SessionPopoverLayout.heroSpacing) {
                 VStack(spacing: 6) {
@@ -406,7 +403,10 @@ struct IdleStartControls: View {
 
                         DatePicker(
                             "Choose session end time",
-                            selection: $selectedTime,
+                            selection: Binding(
+                                get: { deadline ?? now },
+                                set: { selection.pick($0, at: Date(), calendar: .current) }
+                            ),
                             displayedComponents: .hourAndMinute
                         )
                         .labelsHidden()
@@ -435,11 +435,28 @@ struct IdleStartControls: View {
                 Text(deadline.map { UntilDeadlineFormatting.string(for: $0, now: now) } ?? "Invalid end time")
                     .font(.caption)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(previewStyle(deadline: deadline, now: now))
                     .lineLimit(1)
                     .frame(height: SessionPopoverLayout.sessionRowHeight)
             }
         }
+        .background {
+            WindowVisibilityObserver { isVisible in
+                if isVisible {
+                    selection.popoverDidOpen(at: Date())
+                } else {
+                    selection.popoverDidClose(at: Date())
+                }
+            }
+        }
+    }
+
+    private func previewStyle(deadline: Date?, now: Date) -> AnyShapeStyle {
+        guard let deadline, UntilDeadlineFormatting.isLongSession(ending: deadline, now: now) else {
+            return AnyShapeStyle(.secondary)
+        }
+
+        return AnyShapeStyle(.orange)
     }
 
     func startUntil(_ deadline: Date) -> Bool {
