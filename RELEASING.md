@@ -1,7 +1,8 @@
 # Releasing UpTil
 
 Set the version and build number in `Resources/Info.plist`, then run
-`mise run check` and `mise run package`. This creates
+`mise run check`, the [checks before releasing](#checks-before-releasing), and
+`mise run package`. This creates
 `dist/UpTil-VERSION-arm64.zip` and its SHA-256 checksum for the GitHub
 release tagged `vVERSION`. The ZIP includes the app and its bundled `uptil`
 CLI for Apple silicon Macs running macOS 14 or later; Intel Macs are not
@@ -37,3 +38,23 @@ mise run release-notes v0.1.0 dist/release-notes-v0.1.0.md
 This requires an authenticated `gh` CLI and replaces the full description,
 so keep the installation and signing information in the file. It leaves
 assets and the draft/published status unchanged.
+
+## Checks before releasing
+
+These live checks run against the development build:
+
+- `scripts/verify-sleep-assertion` replaces any running UpTil and asks you to
+  start a session, turn on **Keep display awake**, and stop it from the menu.
+  It checks the power assertions of the exact process it launched.
+- `scripts/verify-cli-session` (`mise run app:test-live`) checks CLI and MCP
+  transitions, assertions, and cleanup. It refuses to run while UpTil is
+  running, and its MCP client check needs Node.js and npm.
+- `scripts/verify-mcp-interoperability` checks MCP discovery against a running
+  app.
+
+Also check by hand that:
+
+- **+**, **−**, **Until**, **∞**, **Pause**, **Resume**, and **Stop** work;
+- a short timer ends on its own;
+- **Keep display awake** switches during a session;
+- `pmset -g assertions` no longer lists UpTil after **Quit**.
