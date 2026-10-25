@@ -46,7 +46,7 @@ public enum JSONValue: Codable, Equatable, Sendable {
 public enum MCPControl {
     public static let protocolVersion = "2026-07-28"
     public static let serverName = "uptil"
-    public static let serverVersion = "0.1.0"
+    public static let serverVersion = "0.2.0"
     public static let statusSchemaVersion = 1
 
     public static func encoder() -> JSONEncoder {
