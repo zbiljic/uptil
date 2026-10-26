@@ -335,6 +335,8 @@ struct SessionPopover: View {
 
             Spacer(minLength: 0)
 
+            AboutMenuButton()
+
             Button {
                 AppQuitAction.perform(controller: controller) {
                     NSApplication.shared.terminate(nil)
