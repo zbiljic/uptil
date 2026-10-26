@@ -20,8 +20,8 @@
 --ifdef indent
 --self remove
 --stripunusedargs closure-only
---enable blankLinesAtEndOfScope,privateStateVariables,validateTestCases
---disable modifierOrder,swiftTestingTestCaseNames
+--enable blankLinesAtEndOfScope,validateTestCases
+--disable modifierOrder,swiftTestingTestCaseNames,repeatedGuard
 
 # Generated and third-party content
 --exclude Derived,DerivedData,.build,.swiftpm,Tuist/Dependencies,*.xcodeproj,*.xcworkspace
