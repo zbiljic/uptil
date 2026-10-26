@@ -32,7 +32,7 @@ install_official_client() {
             --ignore-scripts \
             --no-save \
             --package-lock=false \
-            @modelcontextprotocol/client@2.0.0
+            @modelcontextprotocol/client@2.4.0
     ); do
         if test "$attempt" -ge 3; then
             echo "Unable to install the pinned MCP client after three attempts." >&2
